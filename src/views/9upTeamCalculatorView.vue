@@ -2464,7 +2464,7 @@ const getPlayerImage = (p: Raw | null) => {
         <div class="flex items-center gap-2">
           <input type="file" ref="fileInput" accept=".json" class="hidden" @change="importFromFile" />
           
-          <<!-- 상단 5종 버튼 메뉴바 -->
+          <!-- 상단 5종 버튼 메뉴바 -->
           <div class="flex items-center bg-black/20 rounded-lg p-0.5 border border-white/10 shadow-inner">
              <button @click="saveToLocalStorage" class="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="브라우저에 이름 지정하여 저장"><Save class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">다중 저장</span></button>
              <button @click="openSaveManager" class="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="저장된 라인업 관리(불러오기/삭제)"><FolderOpen class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">불러오기</span></button>
@@ -3784,7 +3784,6 @@ const getPlayerImage = (p: Raw | null) => {
       <span class="text-[10px] text-neutral-400 mt-3">기기 사양에 따라 5~10초 정도 소요될 수 있습니다.</span>
     </div>
   </div>
-</template>
 </template>
 
 <style scoped>
