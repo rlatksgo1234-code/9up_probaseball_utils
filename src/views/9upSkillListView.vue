@@ -41,8 +41,8 @@ const type = ref<'normal' | 'enhanced'>('normal')
 // 카드별 연도 선택 상태 (압도 전용 사용)
 const selectedYearByName = ref<Record<string, string>>({})
 
-// 전역 레벨(강화 탭)
-const level = ref<number>(1)
+// 🌟 전역 레벨(강화 탭) 기본값을 0으로 수정
+const level = ref<number>(0)
 
 // 페이지네이션
 const page = ref(1)
@@ -137,10 +137,7 @@ function renderEffectItem(e: any): string {
 }
 
 /**
- * 레벨 효과 리졸버
- * - 연도 노드가 "배열"이면 => 그 배열을 해당 연도의 레벨 테이블로 간주 (압도)
- * - 연도 노드가 "객체"이고 내부에 by_level/effects_by_level 등이 있으면 그걸 사용
- * - 아니면 전역 effects_by_level 사용
+ * 🌟 레벨 효과 리졸버 (0~15 레벨 매핑 수정 완료)
  */
 function resolveLevelEffects(card: SkillCardVM, lvl: number) {
   if (card.kind !== 'enhanced') return []
@@ -151,8 +148,9 @@ function resolveLevelEffects(card: SkillCardVM, lvl: number) {
   const yearNode = y ? meta.effects_by_year?.[y] : undefined
 
   // 1) 압도 케이스: 연도별 배열 = 레벨 테이블
+  // 🌟 lvl이 0부터 시작하므로 배열 인덱스로 그대로 사용
   if (Array.isArray(yearNode)) {
-    const idx = Math.min(Math.max(lvl, 1), yearNode.length) - 1
+    const idx = Math.min(Math.max(lvl, 0), Math.max(0, yearNode.length - 1))
     const item = yearNode[idx]
     return Array.isArray(item) ? item : [item]
   }
@@ -163,13 +161,15 @@ function resolveLevelEffects(card: SkillCardVM, lvl: number) {
       (yearNode as any).effects_by_level ??
       (yearNode as any).by_level ??
       (yearNode as any).levels
+      
     if (Array.isArray(byL)) {
-      const idx = Math.min(Math.max(lvl, 1), byL.length) - 1
+      const idx = Math.min(Math.max(lvl, 0), Math.max(0, byL.length - 1))
       const arr = byL[idx] ?? []
       return Array.isArray(arr) ? arr : [arr]
     }
     if (byL && typeof byL === 'object') {
-      const arr = byL[String(lvl)] ?? []
+      // 🌟 JSON의 객체 키가 '1', '2' 형태로 되어 있을 수 있으므로 lvl + 1 로 조회
+      const arr = byL[String(lvl + 1)] ?? []
       return Array.isArray(arr) ? arr : [arr]
     }
   }
@@ -177,12 +177,12 @@ function resolveLevelEffects(card: SkillCardVM, lvl: number) {
   // 3) 전역 레벨 테이블
   const byLevel = meta.effects_by_level
   if (Array.isArray(byLevel)) {
-    const idx = Math.min(Math.max(lvl, 1), byLevel.length) - 1
+    const idx = Math.min(Math.max(lvl, 0), Math.max(0, byLevel.length - 1))
     const arr = byLevel[idx] ?? []
     return Array.isArray(arr) ? arr : [arr]
   }
   if (byLevel && typeof byLevel === 'object') {
-    const arr = (byLevel as Record<string, any>)[String(lvl)] ?? []
+    const arr = (byLevel as Record<string, any>)[String(lvl + 1)] ?? []
     return Array.isArray(arr) ? arr : [arr]
   }
 
@@ -190,15 +190,10 @@ function resolveLevelEffects(card: SkillCardVM, lvl: number) {
 }
 const levelEffects = (card: SkillCardVM, lvl: number) => resolveLevelEffects(card, lvl)
 
-/**
- * 연도 효과:
- * - 연도 노드가 "배열(레벨별)"이면 레벨 효과로 이미 처리되므로 여기선 빈 배열 반환
- * - 그 외(문자열/배열 고정효과)만 노출
- */
 function yearEffects(card: SkillCardVM, y?: string) {
   if (!y || card.kind !== 'enhanced') return []
   const node = enhancedMap.value[card.name]?.effects_by_year?.[y]
-  if (Array.isArray(node)) return [] // 압도: 레벨로 처리함
+  if (Array.isArray(node)) return [] 
   if (!node) return []
   return Array.isArray(node) ? node : [node]
 }
@@ -239,7 +234,6 @@ const listToRender = computed<SkillCardVM[]>(() => {
       effectsByLevel: s.effects_by_level ?? []
     }))
     .sort((a, b) => {
-      // 골든글러브, 압도 같은 특수 스킬을 최상단으로 끌어올림
       const special = ['골든글러브', '압도', '존재감']
       const aIsSpecial = special.includes(a.name)
       const bIsSpecial = special.includes(b.name)
@@ -321,7 +315,7 @@ function goToPage(p: number) {
       </div>
     </div>
 
-    <!-- Top toolbar: result summary + page size -->
+    <!-- Top toolbar -->
     <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div class="text-sm text-neutral-600 dark:text-neutral-300">
         총 <span class="font-semibold">{{ totalCount }}</span>개
@@ -340,12 +334,11 @@ function goToPage(p: number) {
       </div>
     </div>
 
-    <!-- Enhanced-only Options (level slider) -->
+    <!-- 🌟 Enhanced-only Options (level slider) : 0~15로 수정 완료 -->
     <div v-if="type === 'enhanced'" class="mb-6 flex flex-wrap items-center gap-4">
       <div class="flex items-center gap-3">
         <span class="text-sm text-neutral-700 dark:text-neutral-300">레벨</span>
-        <!-- 압도/골글은 16레벨까지 커버. -->
-        <input type="range" min="1" max="16" v-model.number="level" class="slider w-36 accent-blue-600" />
+        <input type="range" min="0" max="15" v-model.number="level" class="slider w-36 accent-blue-600" />
         <span class="inline-flex items-center rounded-full border border-blue-200 dark:border-blue-800 px-2 py-0.5 text-xs font-semibold
                       text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-900/30">
           {{ level }}
@@ -402,7 +395,6 @@ function goToPage(p: number) {
           </div>
 
           <div v-else class="space-y-2">
-            <!-- 압도 전용: 카드 내부 '년도' 셀렉터 -->
             <div
               v-if="(card.name === '압도' || card.name === '존재감') && yearOptionsFor(card.name).length"
               class="flex items-center gap-3 mb-1"
@@ -417,14 +409,12 @@ function goToPage(p: number) {
               </select>
             </div>
 
-            <!-- 레벨 효과 -->
             <ul v-if="levelEffects(card, level)?.length" class="list-disc pl-5 text-sm text-neutral-800 dark:text-neutral-200">
               <li v-for="(e, i) in levelEffects(card, level)" :key="'l'+i">
                 {{ renderEffectItem(e) }}
               </li>
             </ul>
 
-            <!-- (필요 시) 연도 고정 효과 -->
             <ul
               v-if="yearEffects(card, selectedYearByName[card.name])?.length"
               class="list-disc pl-5 text-sm text-neutral-800 dark:text-neutral-200"
