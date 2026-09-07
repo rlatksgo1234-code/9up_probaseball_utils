@@ -295,22 +295,18 @@ const filteredPlayers = computed(() => {
             continue
           }
 
-          // 🌟 투수 신분증 검사 로직 🌟
           if (field === 'pitchingFormGroup') {
             const pType = String(p.pitchingType || '').toUpperCase().trim();
             const tHand = String(p.throwHand || '').toUpperCase().trim();
             
-            // 🚨 타자 커트: positionLc(소문자 포지션 배열)에 'p'(투수, sp, rp)가 포함되지 않으면 탈락!
             const isPitcher = positionLc.some(pos => pos.includes('p'));
             if (!isPitcher) return false;
 
             let group = '';
             
-            // 투수이면서 언더나 사이드인 경우
             if (pType === 'U' || pType === 'S') {
                group = '언더·사이드';
             } 
-            // 그 외 (오버핸드이거나 기본값)
             else {
                if (tHand === 'L') group = '좌완';
                if (tHand === 'R') group = '우완';
@@ -330,16 +326,15 @@ const filteredPlayers = computed(() => {
              continue
           }
 
+          // 🌟 제외할 이름: 태그(배열) 방식으로 변경! 여러 명을 확실하게 잘라냅니다.
           if (field === 'excludedName') {
-            const rawExcluded = String(selected);
-            const searchGroups = rawExcluded.split(',').map(g => g.trim()).filter(Boolean)
-                 .map(g => g.split(/\s+/).map(t => normText(t)).filter(Boolean));
-            
-            if (searchGroups.length > 0) {
-               const isMatch = searchGroups.some(tokens => tokens.every(t => nameNorm.includes(t)));
-               if (isMatch) return false; 
+            if (Array.isArray(selected) && selected.length > 0) {
+              const excludedTerms = selected.map(s => normText(String(s)));
+              const hasAny = excludedTerms.some(term => nameNorm.includes(term));
+              // 입력한 제외 이름 칩 중에 하나라도 현재 선수 이름에 포함되어 있다면 가차없이 아웃!
+              if (hasAny) return false;
             }
-            continue
+            continue;
           }
           
           if (field === 'synergy') {
@@ -378,7 +373,7 @@ const filteredPlayers = computed(() => {
               if (searchGroups.length > 0) {
                  const hay = Array.from(synergyNormSet).join(' ');
                  const isMatch = searchGroups.some(tokens => tokens.every(t => hay.includes(t)));
-                 if (isMatch) return false; 
+                 if (!isMatch) return false; 
               }
             }
             continue
@@ -460,7 +455,10 @@ async function loadCsv() {
     filters.value.grade = grades
   }
   if (typeof filters.value.name !== 'string') filters.value.name = ''
-  if (typeof filters.value.excludedName !== 'string') filters.value.excludedName = '' 
+  
+  // 🌟 제외할 이름 초기값을 '문자열'에서 '빈 배열([])'로 변경!
+  if (!Array.isArray(filters.value.excludedName)) filters.value.excludedName = [] 
+  
   if (!Array.isArray(filters.value.synergy)) filters.value.synergy = []
   if (!Array.isArray(filters.value.search)) filters.value.search = []
   if (typeof filters.value.hsUniSynergyOnly !== 'boolean') filters.value.hsUniSynergyOnly = false
