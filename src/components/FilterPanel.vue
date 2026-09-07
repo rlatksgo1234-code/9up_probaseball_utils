@@ -227,6 +227,9 @@ const getSkillText = (skill: string, type: 'normal' | 'enhanced' = 'enhanced'): 
   return found ? decodeHtmlEntities(found.enhanced_skill || skill) : skill
 }
 
+/* =========================
+   포함할 이름 (부분 일치)
+========================= */
 const nameInput = ref('')
 const nameWrapperRef = ref<HTMLElement | null>(null)
 const showNameSuggestions = ref(false)
@@ -252,29 +255,15 @@ const onNameEnter = () => {
   if (showNameSuggestions.value && nameActiveIndex.value >= 0) pickName(filteredNameSuggestions.value[nameActiveIndex.value])
 }
 
+/* =========================
+   🌟 제외할 이름 (NOT) 자동완성 & 태그 로직으로 완전 개조
+========================= */
 const excludedNameInput = ref('')
 const excludedNameWrapperRef = ref<HTMLElement | null>(null)
 const showExcludedNameSuggestions = ref(false)
+const isExcludedNameComposing = ref(false)
+const selectedExcludedNameTags = ref<string[]>([])
 const excludedNameActiveIndex = ref(-1)
-
-watch(() => props.filters?.excludedName, (v) => { excludedNameInput.value = (v ?? '').toString() }, { immediate: true })
-watch(excludedNameInput, (v) => emit('update:filters', { ...(props.filters ?? {}), excludedName: (v ?? '').toString() }))
-
-const filteredExcludedNameSuggestions = computed(() => {
-  const q = norm(excludedNameInput.value)
-  const src = Array.from(new Set((props.nameOptions ?? []).filter(Boolean)))
-  const list = q ? src.filter(n => n.toLowerCase().includes(q)) : src
-  return list.slice(0, 100)
-})
-const pickExcludedName = (val: string) => { excludedNameInput.value = val; showExcludedNameSuggestions.value = false }
-const moveExcludedName = (delta: number) => {
-  if (!showExcludedNameSuggestions.value || filteredExcludedNameSuggestions.value.length === 0) return
-  const n = filteredExcludedNameSuggestions.value.length
-  excludedNameActiveIndex.value = ((excludedNameActiveIndex.value + delta + n) % n)
-}
-const onExcludedNameEnter = () => {
-  if (showExcludedNameSuggestions.value && excludedNameActiveIndex.value >= 0) pickExcludedName(filteredExcludedNameSuggestions.value[excludedNameActiveIndex.value])
-}
 
 const searchInput = ref('')
 const showSuggestions = ref(false)
@@ -289,6 +278,16 @@ const isExcludedComposing = ref(false)
 const excludedWrapperRef = ref<HTMLElement | null>(null)
 const selectedExcludedTags = ref<string[]>([])
 const excludedActiveIndex = ref(-1)
+
+// 🌟 제외할 이름: 이미 고른 태그는 빼고 추천
+const filteredExcludedNameSuggestions = computed(() => {
+  const q = norm(excludedNameInput.value)
+  const picked = new Set(selectedExcludedNameTags.value.map(norm))
+  return Array.from(new Set((props.nameOptions ?? []).filter(Boolean)))
+    .filter((s) => !picked.has(norm(s)))
+    .filter((s) => (q ? norm(s).includes(q) : true))
+    .slice(0, 100)
+})
 
 const filteredSuggestions = computed(() => {
   const q = norm(searchInput.value)
@@ -308,12 +307,16 @@ const filteredExcludedSuggestions = computed(() => {
     .slice(0, 100)
 })
 
+// 🌟 본사 데이터와 싱크 맞추기 (제외할 이름 배열 추가)
 const syncFromParent = () => {
   const src = props.filters?.synergy
   selectedTags.value = Array.isArray(src) ? [...new Set(src.filter(Boolean).map(String))] : []
   
   const srcExc = props.filters?.excludedSynergy
   selectedExcludedTags.value = Array.isArray(srcExc) ? [...new Set(srcExc.filter(Boolean).map(String))] : []
+
+  const srcExcName = props.filters?.excludedName
+  selectedExcludedNameTags.value = Array.isArray(srcExcName) ? [...new Set(srcExcName.filter(Boolean).map(String))] : []
 }
 watch(() => props.filters, syncFromParent, { immediate: true, deep: true })
 
@@ -321,9 +324,54 @@ const pushToParent = () => {
   const next = { ...(props.filters ?? {}) }
   next.synergy = [...selectedTags.value]
   next.excludedSynergy = [...selectedExcludedTags.value]
+  next.excludedName = [...selectedExcludedNameTags.value] // 🌟 부모 컴포넌트로 태그 배열 발송
   emit('update:filters', next)
 }
 
+// 🌟 제외할 이름 칩(태그) 추가/제거 함수
+const addExcludedNameTag = (v: string) => {
+  const val = (v ?? '').trim()
+  if (!val) return
+  if (!selectedExcludedNameTags.value.map(norm).includes(norm(val))) {
+    selectedExcludedNameTags.value.push(val)
+    pushToParent()
+  }
+  excludedNameInput.value = ''
+  showExcludedNameSuggestions.value = true
+  excludedNameActiveIndex.value = -1
+}
+const removeExcludedNameTag = (v: string) => {
+  selectedExcludedNameTags.value = selectedExcludedNameTags.value.filter((t) => norm(t) !== norm(v))
+  pushToParent()
+}
+const moveExcludedName = (delta: number) => {
+  if (!showExcludedNameSuggestions.value || filteredExcludedNameSuggestions.value.length === 0) return
+  const n = filteredExcludedNameSuggestions.value.length
+  excludedNameActiveIndex.value = ((excludedNameActiveIndex.value + delta + n) % n)
+}
+const commitExcludedNameByEnter = () => {
+  if (isExcludedNameComposing.value) return
+  if (showExcludedNameSuggestions.value && excludedNameActiveIndex.value >= 0) return addExcludedNameTag(filteredExcludedNameSuggestions.value[excludedNameActiveIndex.value])
+  if (excludedNameInput.value.trim()) addExcludedNameTag(excludedNameInput.value)
+  else if (filteredExcludedNameSuggestions.value.length) addExcludedNameTag(filteredExcludedNameSuggestions.value[0])
+}
+const onExcludedNameCompositionStart = () => (isExcludedNameComposing.value = true)
+const onExcludedNameCompositionEnd = () => (isExcludedNameComposing.value = false)
+const onExcludedNameInputDelimit = (e: Event) => {
+  const v = (e.target as HTMLInputElement).value
+  const parts = v.split(/[,;]+/).map((s) => s.trim()).filter(Boolean)
+  if (parts.length > 1) {
+    parts.forEach(addExcludedNameTag)
+    excludedNameInput.value = ''
+  }
+}
+const onExcludedNameBackspace = (e: KeyboardEvent) => {
+  if ((e.target as HTMLInputElement).value === '' && selectedExcludedNameTags.value.length > 0) {
+    removeExcludedNameTag(selectedExcludedNameTags.value[selectedExcludedNameTags.value.length - 1])
+  }
+}
+
+// 시너지 칩 함수들
 const addTag = (v: string) => {
   const val = (v ?? '').trim()
   if (!val) return
@@ -366,6 +414,7 @@ const onSynergyBackspace = (e: KeyboardEvent) => {
   }
 }
 
+// 제외할 시너지 칩 함수들
 const addExcludedTag = (v: string) => {
   const val = (v ?? '').trim()
   if (!val) return
@@ -425,7 +474,6 @@ defineExpose({
 </script>
 
 <template>
-  <!-- 🌟 mt-2 삭제 완료: 상단 하얀 띠 소멸! -->
   <div class="mx-auto max-w-[1280px] p-2 space-y-4 md:space-y-6">
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
       <div class="space-y-4">
@@ -495,7 +543,6 @@ defineExpose({
       </div>
 
       <div class="space-y-4">
-        <!-- 🌟 포지션 패널 -->
         <section class="rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white/95 dark:bg-neutral-900/95 shadow-sm">
           <button type="button" class="w-full px-4 py-3 flex items-center justify-between hover:bg-neutral-50 dark:hover:bg-neutral-800 rounded-t-lg transition-colors"
                   @click="toggleCollapse('position')" :aria-expanded="collapses.position">
@@ -541,7 +588,6 @@ defineExpose({
               </div>
             </div>
             
-            <!-- 🌟 새롭게 추가된 '좌우놀이'용 투구 폼 버튼! -->
             <div class="mt-4 pt-4 border-t border-neutral-200 dark:border-neutral-700">
               <h4 class="text-xs font-semibold text-neutral-600 dark:text-neutral-400 mb-2">{{ fieldLabels?.pitchingFormGroup || '투구 폼 (좌우놀이)' }}</h4>
               <div class="grid grid-cols-3 gap-2 sm:gap-3">
@@ -554,7 +600,6 @@ defineExpose({
                 </button>
               </div>
             </div>
-            <!-- 🌟 ------------------------------------ -->
 
           </div>
         </section>
@@ -825,6 +870,7 @@ defineExpose({
           </div>
         </div>
 
+        <!-- 🌟 새롭게 추가된 '제외할 이름 (NOT)' 태그 방식 -->
         <div>
           <label class="block text-xs font-semibold text-rose-600 dark:text-rose-400 mb-1">
             {{ fieldLabels?.excludedName || '제외할 이름 (NOT)' }}
@@ -832,11 +878,15 @@ defineExpose({
           <div ref="excludedNameWrapperRef" class="relative">
             <input
               v-model="excludedNameInput"
+              @input="onExcludedNameInputDelimit"
               @focus="showExcludedNameSuggestions = true"
               @keydown.down.prevent="moveExcludedName(1)"
               @keydown.up.prevent="moveExcludedName(-1)"
-              @keydown.enter.prevent="onExcludedNameEnter"
+              @keydown.enter.prevent="commitExcludedNameByEnter"
               @keydown.esc="showExcludedNameSuggestions = false"
+              @keydown.backspace="onExcludedNameBackspace"
+              @compositionstart="onExcludedNameCompositionStart"
+              @compositionend="onExcludedNameCompositionEnd"
               placeholder="제외할 선수명을 입력해 주세요."
               class="w-full bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-600 rounded-md px-3 py-2 pr-10 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 shadow-sm focus:outline-none focus:ring-2 focus:ring-rose-500 focus:border-rose-500 transition-colors"
               role="combobox" aria-expanded="showExcludedNameSuggestions" aria-controls="excluded-name-suggest"
@@ -851,7 +901,7 @@ defineExpose({
               <li
                 v-for="(suggestion, idx) in filteredExcludedNameSuggestions"
                 :key="suggestion"
-                @mousedown.prevent="pickExcludedName(suggestion)"
+                @mousedown.prevent="addExcludedNameTag(suggestion)"
                 @mouseenter="excludedNameActiveIndex = idx"
                 class="px-3 py-2 text-sm cursor-pointer hover:bg-rose-50 dark:hover:bg-rose-900/20 transition-colors"
                 :class="idx === excludedNameActiveIndex ? 'bg-rose-50 dark:bg-rose-900/20' : ''"
@@ -861,6 +911,16 @@ defineExpose({
                 {{ suggestion }}
               </li>
             </ul>
+          </div>
+          <!-- 제외할 이름 태그 뱃지 -->
+          <div class="flex flex-wrap gap-2 mt-2">
+            <span
+              v-for="tag in selectedExcludedNameTags" :key="tag"
+              class="flex items-center gap-1 px-2 py-1 text-xs bg-rose-100 text-rose-800 dark:bg-rose-900/30 dark:text-rose-200 rounded-full transition-colors border border-rose-200 dark:border-rose-800"
+            >
+              {{ tag }}
+              <button @click="removeExcludedNameTag(tag)" class="text-rose-600 hover:text-rose-800 dark:text-rose-300 dark:hover:text-rose-100 transition-colors font-black" aria-label="태그 제거">&times;</button>
+            </span>
           </div>
         </div>
 
