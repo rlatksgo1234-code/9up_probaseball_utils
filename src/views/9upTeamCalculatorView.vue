@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, reactive, watch } from 'vue'
 import Papa from 'papaparse'
-import { Search, Calculator, Star, Shield, Zap, TrendingUp, X, Users, ArrowUpCircle, Sparkles, UserCheck, Filter, ChevronRight as ChevronRightIcon, Check, Save, FolderOpen, Download, Upload } from 'lucide-vue-next'
-
+import { Search, Calculator, Star, Shield, Zap, TrendingUp, X, Users, ArrowUpCircle, Sparkles, UserCheck, Filter, ChevronRight as ChevronRightIcon, Check, Save, FolderOpen, Download, Upload, Camera } from 'lucide-vue-next'
+import { createWorker } from 'tesseract.js'
+  
 type Raw = Record<string, any>
 type CountOp = '==' | '>=' | '<=' | '>' | '<' | 'between'
 
@@ -1911,6 +1912,156 @@ const selectSlot = (slot: string) => {
   }
 }
 
+// ========================================================
+// 📸 인게임 스크린샷 OCR 자동 라인업 등록 엔진
+// ========================================================
+const ocrFileInput = ref<HTMLInputElement | null>(null)
+const isOcrProcessing = ref(false)
+const ocrProgressText = ref('')
+
+// 인게임 다이아몬드 화면 기준 각 슬롯의 카드 영역 상대 좌표 (x%, y%, w%, h%)
+const OCR_SLOTS = [
+  { pos: 'LF',  x: 0.22, y: 0.11, w: 0.11, h: 0.28 },
+  { pos: 'CF',  x: 0.42, y: 0.11, w: 0.11, h: 0.28 },
+  { pos: 'RF',  x: 0.62, y: 0.11, w: 0.11, h: 0.28 },
+  { pos: 'SS',  x: 0.32, y: 0.27, w: 0.11, h: 0.28 },
+  { pos: '2B',  x: 0.52, y: 0.27, w: 0.11, h: 0.28 },
+  { pos: '3B',  x: 0.22, y: 0.39, w: 0.11, h: 0.28 },
+  { pos: 'SP1', x: 0.42, y: 0.39, w: 0.11, h: 0.28 }, // 마운드 투수는 1선발에 배치
+  { pos: '1B',  x: 0.62, y: 0.39, w: 0.11, h: 0.28 },
+  { pos: 'C',   x: 0.42, y: 0.68, w: 0.11, h: 0.28 },
+  { pos: 'DH',  x: 0.53, y: 0.68, w: 0.11, h: 0.28 }
+]
+
+const triggerOcrInput = () => {
+  ocrFileInput.value?.click()
+}
+
+// 캔버스를 통해 각 카드 영역을 잘라내고 2배 확대 (인식률 향상)
+const cropCardInfoRegion = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
+  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
+  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
+  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
+
+  canvas.width = sw * 2
+  canvas.height = sh * 2
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+
+  return canvas.toDataURL('image/png')
+}
+
+// 추출된 텍스트를 players DB와 대조하여 최적의 카드 검색
+const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
+  const cleanText = rawText.replace(/\s+/g, '')
+
+  // 1. DB 전체 선수 중 이름이 텍스트에 포함된 선수 1차 추출
+  const matchingPlayers = players.value.filter(p => {
+    const pName = String(p.name || '').replace(/\s+/g, '')
+    return pName.length >= 2 && cleanText.includes(pName)
+  })
+
+  if (matchingPlayers.length === 0) return null
+  if (matchingPlayers.length === 1) return matchingPlayers[0]
+
+  // 2. 동명이인/시즌 중복 시 등급(HIT, TOP, DGN, ACE, GG 등) 필터링
+  const upperText = rawText.toUpperCase()
+  const gradeKeys = ['DGN', 'TOP', 'HIT', 'ACE', 'GGY', 'MMVP', 'ROY', 'TEA', 'GG', 'ASG', 'SEA', 'POS', 'NT']
+  let foundGrade = ''
+  for (const g of gradeKeys) {
+    if (upperText.includes(g)) {
+      foundGrade = g
+      break
+    }
+  }
+
+  let candidates = matchingPlayers
+  if (foundGrade) {
+    const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === foundGrade)
+    if (gradeFiltered.length > 0) candidates = gradeFiltered
+  }
+  if (candidates.length === 1) return candidates[0]
+
+  // 3. 2자리 연도 필터링 ('83 -> 83, '24 -> 24)
+  const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
+  if (yearMatches && yearMatches.length > 0) {
+    const targetYear = yearMatches[yearMatches.length - 1]
+    const yearFiltered = candidates.filter(p => {
+      const years = getArray(p.year).map(y => String(y).trim())
+      return years.some(y => y.endsWith(targetYear))
+    })
+    if (yearFiltered.length > 0) candidates = yearFiltered
+  }
+  if (candidates.length === 1) return candidates[0]
+
+  // 4. 포지션 적합성 검증
+  const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
+  if (posFiltered.length > 0) return posFiltered[0]
+
+  return candidates[0]
+}
+
+// 스크린샷 일괄 인식 실행 함수
+const handleOcrUpload = async (event: Event) => {
+  const target = event.target as HTMLInputElement
+  const file = target.files?.[0]
+  if (!file) return
+
+  try {
+    isOcrProcessing.value = true
+    ocrProgressText.value = 'OCR 엔진을 시작하고 있습니다...'
+
+    const img = new Image()
+    img.src = URL.createObjectURL(file)
+    await img.decode()
+
+    const worker = await createWorker('kor+eng')
+    let matchedCount = 0
+
+    for (let i = 0; i < OCR_SLOTS.length; i++) {
+      const slot = OCR_SLOTS[i]
+      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 카드를 인식하는 중...`
+
+      const croppedUrl = cropCardInfoRegion(img, slot)
+      if (!croppedUrl) continue
+
+      const { data: { text } } = await worker.recognize(croppedUrl)
+      const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
+
+      if (matchedPlayer) {
+        // 이미 다른 슬롯에 등록되어 있다면 이전 자리 비우기
+        Object.keys(lineup.value).forEach(k => {
+          if (lineup.value[k] && isSamePlayer(lineup.value[k]!, matchedPlayer)) {
+            lineup.value[k] = null
+          }
+        })
+
+        lineup.value[slot.pos] = matchedPlayer
+        initPlayerBuff(slot.pos, matchedPlayer)
+        matchedCount++
+      }
+    }
+
+    await worker.terminate()
+    URL.revokeObjectURL(img.src)
+
+    lineupViewMode.value = 'batter'
+    showToast(`라인업 인식 완료: 총 ${matchedCount}명의 선수가 자동 배치되었습니다!`, 'success')
+  } catch (err) {
+    console.error('OCR 처리 실패:', err)
+    showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
+  } finally {
+    isOcrProcessing.value = false
+    ocrProgressText.value = ''
+    if (ocrFileInput.value) ocrFileInput.value.value = ''
+  }
+}
+
 const fileInput = ref<HTMLInputElement | null>(null)
 
 // 🌟 1. 공통 데이터 불러오기 (데이터 꼬임 방지 강력 버전) 🌟
@@ -2313,13 +2464,22 @@ const getPlayerImage = (p: Raw | null) => {
         <div class="flex items-center gap-2">
           <input type="file" ref="fileInput" accept=".json" class="hidden" @change="importFromFile" />
           
-          <!-- 상단 5종 버튼 메뉴바 -->
+          <<!-- 상단 5종 버튼 메뉴바 -->
           <div class="flex items-center bg-black/20 rounded-lg p-0.5 border border-white/10 shadow-inner">
              <button @click="saveToLocalStorage" class="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="브라우저에 이름 지정하여 저장"><Save class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">다중 저장</span></button>
              <button @click="openSaveManager" class="p-1.5 text-blue-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="저장된 라인업 관리(불러오기/삭제)"><FolderOpen class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">불러오기</span></button>
              <div class="w-px h-3 bg-white/20 mx-1"></div>
              <button @click="exportToFile" class="p-1.5 text-emerald-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="PC에 파일로 내보내기"><Download class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">파일 저장</span></button>
              <button @click="triggerFileInput" class="p-1.5 text-emerald-200 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="PC에서 파일 불러오기"><Upload class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">파일 열기</span></button>
+             <div class="w-px h-3 bg-white/20 mx-1"></div>
+
+             <!-- 🌟 신규 추가: 스크린샷 자동 등록 버튼 -->
+             <input type="file" ref="ocrFileInput" accept="image/*" class="hidden" @change="handleOcrUpload" />
+             <button @click="triggerOcrInput" :disabled="isOcrProcessing" class="p-1.5 text-amber-300 hover:text-white hover:bg-white/10 rounded-md transition-colors flex items-center gap-1" title="인게임 라인업 스크린샷으로 자동 등록">
+               <Camera class="w-3.5 h-3.5" />
+               <span class="text-[10px] font-bold hidden sm:block">스크린샷 등록</span>
+             </button>
+
              <div class="w-px h-3 bg-white/20 mx-1"></div>
              <button @click="resetLineup" class="p-1.5 text-rose-300 hover:text-white hover:bg-rose-500/50 rounded-md transition-colors flex items-center gap-1" title="각인 유지하고 라인업 초기화"><X class="w-3.5 h-3.5" /><span class="text-[10px] font-bold hidden sm:block">초기화</span></button>
           </div>
@@ -3615,6 +3775,16 @@ const getPlayerImage = (p: Raw | null) => {
       <div class="absolute bottom-0 w-3 h-3 bg-neutral-900 dark:bg-white rotate-45 border-r border-b border-neutral-700 dark:border-neutral-200"
            :style="{ left: tooltipState.arrowLeft, transform: 'translate(-50%, 50%)' }"></div>
   </div>
+<!-- 🌟 OCR 분석 진행 오버레이 모달 -->
+  <div v-if="isOcrProcessing" class="fixed inset-0 z-[999999] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+    <div class="bg-neutral-900 border border-neutral-700 p-6 rounded-2xl shadow-2xl flex flex-col items-center max-w-xs w-full text-center">
+      <div class="animate-spin rounded-full border-4 border-neutral-700 border-t-amber-400 h-10 w-10 mb-4"></div>
+      <h3 class="text-sm font-black text-white mb-1">인게임 라인업 스캔 중</h3>
+      <p class="text-xs font-bold text-amber-400">{{ ocrProgressText }}</p>
+      <span class="text-[10px] text-neutral-400 mt-3">기기 사양에 따라 5~10초 정도 소요될 수 있습니다.</span>
+    </div>
+  </div>
+</template>
 </template>
 
 <style scoped>
