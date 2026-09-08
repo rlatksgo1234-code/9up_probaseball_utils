@@ -3828,7 +3828,7 @@ const getPlayerImage = (p: Raw | null) => {
       <span class="text-[10px] text-neutral-400 mt-3">기기 사양에 따라 5~10초 정도 소요될 수 있습니다.</span>
     </div>
   </div>
-  <!-- 🌟 FC 온라인 스타일: 동일 선수 시즌 교체 모달 🌟 -->
+<!-- 🌟 FC 온라인 스타일: 동일 선수 시즌 교체 모달 🌟 -->
   <div v-if="showCardSwapModal && swapTargetSlot" class="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
     <div class="bg-white dark:bg-neutral-900 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] border border-neutral-200 dark:border-neutral-700">
       
@@ -3855,13 +3855,11 @@ const getPlayerImage = (p: Raw | null) => {
               :class="isSameCard(lineup[swapTargetSlot]!, cand) ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 ring-1 ring-indigo-400' : 'border-neutral-200 dark:border-neutral-700'">
             
             <div class="flex items-center gap-3">
-               <!-- 등급 뱃지 이미지 -->
                <div class="w-12 h-12 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-700/50 flex items-center justify-center shrink-0 overflow-hidden">
                   <img v-if="getGradeImage(cand.grade)" :src="getGradeImage(cand.grade)" class="w-10 object-contain" @error="hideImage" />
                   <span v-else class="text-[9px] font-black text-neutral-400">{{ cand.grade }}</span>
                </div>
                
-               <!-- 선수 정보 -->
                <div class="flex flex-col">
                   <div class="flex items-center gap-2">
                      <span class="font-black text-sm text-neutral-900 dark:text-white">{{ cand.name }}</span>
@@ -3884,46 +3882,61 @@ const getPlayerImage = (p: Raw | null) => {
                </div>
             </div>
 
-            <!-- 교체 버튼 -->
             <button class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-black transition-colors shadow-sm shrink-0">
                선택
             </button>
          </div>
       </div>
     </div>
+  </div> <!-- 👈 1. 카드 교체 모달이 여기서 정상적으로 닫힙니다 -->
+
   <!-- ======================================================= -->
-    <!-- 🔍 여기에 2번 디버그 UI 코드를 붙여넣으세요 -->
-    <!-- ======================================================= -->
-    <div v-if="ocrDebugList.length > 0" class="mt-8 p-4 bg-slate-900 border border-slate-700 rounded-xl text-white">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="font-bold text-lg text-emerald-400">🔍 OCR 크롭 검사기 (9개 슬롯 실제 캡처본)</h3>
-        <button @click="ocrDebugList = []" class="text-xs text-slate-400 hover:text-white underline">닫기</button>
+  <!-- 🔍 2. 독립된 OCR 크롭 검사기 (화면 최상단 z-index 하단 서랍장) -->
+  <!-- ======================================================= -->
+  <div v-if="ocrDebugList.length > 0" class="fixed inset-x-0 bottom-0 z-[999999] max-h-[60vh] bg-neutral-950/95 backdrop-blur-md border-t-2 border-emerald-500 shadow-2xl p-4 overflow-y-auto text-white">
+    <div class="max-w-7xl mx-auto">
+      <div class="flex items-center justify-between mb-3 pb-2 border-b border-neutral-800">
+        <div class="flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+          <h3 class="font-bold text-sm sm:text-base text-emerald-400">🔍 OCR 크롭 검사기 (9개 슬롯 실제 캡처 및 인식 결과)</h3>
+          <span class="text-xs text-neutral-400 hidden sm:inline">사진 속 글자가 위아래로 잘리지 않았는지 확인하세요</span>
+        </div>
+        <button @click="ocrDebugList = []" class="px-2.5 py-1 text-xs bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded border border-neutral-600 transition-colors font-bold">✕ 닫기</button>
       </div>
       
-      <div class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-3">
+      <div class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-9 gap-2">
         <div 
           v-for="item in ocrDebugList" 
           :key="item.slot"
-          class="bg-slate-800 p-2 rounded-lg border text-center flex flex-col items-center"
-          :class="item.matchedCard ? 'border-emerald-500/50' : 'border-rose-500/50'"
+          class="bg-neutral-900 p-2 rounded-xl border text-center flex flex-col items-center shadow-lg"
+          :class="item.matchedCard ? 'border-emerald-500/50' : 'border-rose-500/60'"
         >
-          <span class="font-bold text-xs mb-1 px-2 py-0.5 rounded" :class="item.matchedCard ? 'bg-emerald-600' : 'bg-rose-600'">
-            {{ item.slot }}
-          </span>
-          <img :src="item.imgUrl" class="w-full h-24 object-contain bg-black rounded border border-slate-700 my-1" />
-          <span class="text-[11px] font-medium text-emerald-300 truncate w-full" v-if="item.matchedCard">
-            {{ item.matchedCard }}
-          </span>
-          <span class="text-[11px] text-rose-400 font-bold" v-else>
-            미인식 (빈칸)
-          </span>
-          <span class="text-[9px] text-slate-400 truncate w-full mt-1" :title="item.rawText">
+          <div class="w-full flex items-center justify-between mb-1 px-1">
+            <span class="font-black text-xs px-1.5 py-0.2 rounded" :class="item.matchedCard ? 'bg-emerald-600 text-white' : 'bg-rose-600 text-white'">
+              {{ item.slot }}
+            </span>
+            <span class="text-[10px] font-bold" :class="item.matchedCard ? 'text-emerald-400' : 'text-rose-400'">
+              {{ item.matchedCard ? '성공' : '실패' }}
+            </span>
+          </div>
+
+          <!-- 실제 캡처된 크롭 이미지 -->
+          <div class="w-full h-24 bg-black rounded-lg border border-neutral-800 flex items-center justify-center overflow-hidden mb-1 p-0.5">
+            <img :src="item.imgUrl" class="w-full h-full object-contain" />
+          </div>
+          
+          <!-- 확정된 카드 명 -->
+          <div class="text-[11px] font-bold truncate w-full text-center" :class="item.matchedCard ? 'text-emerald-300' : 'text-rose-400'">
+            {{ item.matchedCard || '미인식' }}
+          </div>
+          
+          <!-- OCR이 읽은 날것의 텍스트 -->
+          <div class="text-[9px] text-neutral-400 truncate w-full mt-1 bg-neutral-950 px-1 py-0.5 rounded border border-neutral-800" :title="item.rawText">
             "{{ item.rawText || '텍스트 없음' }}"
-          </span>
+          </div>
         </div>
       </div>
     </div>
-    <!-- ======================================================= -->
   </div>
 </template>
 
