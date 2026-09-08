@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, reactive, watch } from 'vue'
 import Papa from 'papaparse'
-import { Search, Calculator, Star, Shield, Zap, TrendingUp, X, Users, ArrowUpCircle, Sparkles, UserCheck, Filter, ChevronRight as ChevronRightIcon, Check, Save, FolderOpen, Download, Upload, Camera } from 'lucide-vue-next'
+// 상단 lucide-vue-next 임포트 목록에 RefreshCw 추가
+import { Search, Calculator, Star, Shield, Zap, TrendingUp, X, Users, ArrowUpCircle, Sparkles, UserCheck, Filter, ChevronRight as ChevronRightIcon, Check, Save, FolderOpen, Download, Upload, Camera, RefreshCw } from 'lucide-vue-next'
 import { createWorker } from 'tesseract.js'
   
 type Raw = Record<string, any>
@@ -1913,11 +1914,45 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 자동 라인업 등록 엔진 (색상+지능형 매칭 강화)
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
 const ocrProgressText = ref('')
+
+// 🌟 FC 온라인식 카드 교체 모달 상태
+const showCardSwapModal = ref(false)
+const swapTargetSlot = ref<string | null>(null)
+
+const swapCandidates = computed(() => {
+  if (!swapTargetSlot.value) return []
+  const currentP = lineup.value[swapTargetSlot.value]
+  if (!currentP) return []
+  const cleanName = String(currentP.name || '').replace(/\s+/g, '')
+  return players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === cleanName)
+})
+
+const openCardSwapModal = (slot: string) => {
+  swapTargetSlot.value = slot
+  showCardSwapModal.value = true
+}
+
+const applyCardSwap = (newCard: Raw) => {
+  if (!swapTargetSlot.value) return
+  const slot = swapTargetSlot.value
+  
+  // 중복 카드 이전 자리 비우기
+  Object.keys(lineup.value).forEach(k => {
+    if (lineup.value[k] && isSamePlayer(lineup.value[k]!, newCard) && k !== slot) {
+      lineup.value[k] = null
+    }
+  })
+
+  lineup.value[slot] = newCard
+  initPlayerBuff(slot, newCard)
+  showToast(`[${newCard.name}] 카드가 성공적으로 교체되었습니다!`, 'success')
+  showCardSwapModal.value = false
+}
 
 // 인게임 다이아몬드 화면 기준 각 슬롯 카드 영역 좌표 (x%, y%, w%, h%)
 const OCR_SLOTS = [
@@ -1927,7 +1962,7 @@ const OCR_SLOTS = [
   { pos: 'SS',  x: 0.32, y: 0.27, w: 0.11, h: 0.28 },
   { pos: '2B',  x: 0.52, y: 0.27, w: 0.11, h: 0.28 },
   { pos: '3B',  x: 0.22, y: 0.39, w: 0.11, h: 0.28 },
-  { pos: 'SP1', x: 0.42, y: 0.39, w: 0.11, h: 0.28 }, // 마운드 투수는 1선발에 배치
+  { pos: 'SP1', x: 0.42, y: 0.39, w: 0.11, h: 0.28 },
   { pos: '1B',  x: 0.62, y: 0.39, w: 0.11, h: 0.28 },
   { pos: 'C',   x: 0.42, y: 0.68, w: 0.11, h: 0.28 },
   { pos: 'DH',  x: 0.53, y: 0.68, w: 0.11, h: 0.28 }
@@ -1937,164 +1972,81 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 뱃지 색상(RGB) 판별 및 [뱃지 + 이름] 2단 결합 캔버스 생성
-const processCardSlotImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
-  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
-  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
-  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
-  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
+// 캔버스 크롭 도우미 (3배율 고해상도 확대 + 흑백 대비 강화)
+const cropRegion = (image: HTMLImageElement, rx: number, ry: number, rw: number, rh: number, contrast: boolean = false) => {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
 
-  // 1. 임시 캔버스에 카드 전체 추출
-  const cardCanvas = document.createElement('canvas')
-  const cardCtx = cardCanvas.getContext('2d')
-  if (!cardCtx) return null
-  cardCanvas.width = sw
-  cardCanvas.height = sh
-  cardCtx.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh)
+  const sx = Math.max(0, Math.round(rx))
+  const sy = Math.max(0, Math.round(ry))
+  const sw = Math.min(image.naturalWidth - sx, Math.round(rw))
+  const sh = Math.min(image.naturalHeight - sy, Math.round(rh))
 
-  // 2. 뱃지 영역(상단 35% ~ 62%) 색상 분석 (HIT: 붉은색, TOP: 보라색)
-  const badgeY = Math.round(sh * 0.35)
-  const badgeH = Math.round(sh * 0.27)
-  const badgeData = cardCtx.getImageData(0, badgeY, sw, badgeH).data
+  canvas.width = sw * 3
+  canvas.height = sh * 3
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
 
-  let redPixels = 0
-  let purplePixels = 0
-  const totalPixels = sw * badgeH
-
-  for (let i = 0; i < badgeData.length; i += 4) {
-    const r = badgeData[i]
-    const g = badgeData[i + 1]
-    const b = badgeData[i + 2]
-
-    // 선명한 붉은색 (HIT 등급)
-    if (r > 125 && r > g * 1.5 && r > b * 1.5) redPixels++
-    // 보라/네온 계열 (TOP 등급)
-    else if (r > 70 && b > 80 && g < r * 0.7 && g < b * 0.7) purplePixels++
+  if (contrast) {
+    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+    const d = imgData.data
+    for (let i = 0; i < d.length; i += 4) {
+      const avg = (d[i] + d[i+1] + d[i+2]) / 3
+      const val = avg > 115 ? 255 : 0
+      d[i] = d[i+1] = d[i+2] = val
+    }
+    ctx.putImageData(imgData, 0, 0)
   }
 
-  let colorGrade = ''
-  if (redPixels / totalPixels > 0.02) colorGrade = 'HIT'
-  else if (purplePixels / totalPixels > 0.02) colorGrade = 'TOP'
-
-  // 3. [뱃지 영역]과 [이름 영역(하단 78%~100%)]만 선별하여 2.5배 확대 결합
-  const nameY = Math.round(sh * 0.78)
-  const nameH = sh - nameY
-
-  const combinedCanvas = document.createElement('canvas')
-  const combinedCtx = combinedCanvas.getContext('2d')
-  if (!combinedCtx) return null
-
-  const scale = 2.5
-  combinedCanvas.width = Math.round(sw * scale)
-  combinedCanvas.height = Math.round((badgeH + nameH + 10) * scale)
-  combinedCtx.imageSmoothingEnabled = true
-
-  // 배경 검정 처리
-  combinedCtx.fillStyle = '#000000'
-  combinedCtx.fillRect(0, 0, combinedCanvas.width, combinedCanvas.height)
-
-  // 상단: 뱃지 영역 복사
-  combinedCtx.drawImage(cardCanvas, 0, badgeY, sw, badgeH, 0, 0, sw * scale, badgeH * scale)
-  // 하단: 이름 영역 복사
-  combinedCtx.drawImage(cardCanvas, 0, nameY, sw, nameH, 0, (badgeH + 10) * scale, sw * scale, nameH * scale)
-
-  return {
-    dataUrl: combinedCanvas.toDataURL('image/png'),
-    colorGrade
-  }
+  return canvas.toDataURL('image/png')
 }
 
-// 추출된 텍스트와 색상 판별을 결합한 최적 카드 검색
-const findBestMatchingPlayer = (rawText: string, colorGrade: string, targetPos: string): Raw | null => {
-  const cleanText = rawText.replace(/\s+/g, '')
+// 선수 매칭 알고리즘 (이름 + 뱃지 텍스트 결합)
+const findBestMatchingPlayer = (nameText: string, badgeText: string, targetPos: string): Raw | null => {
+  const cleanName = nameText.replace(/[^가-힣]/g, '').trim()
+  if (cleanName.length < 2) return null
 
-  // 1. 이름 탐색 (선수 DB 이름이 텍스트에 포함되어 있는지 검사)
-  let matchingPlayers = players.value.filter(p => {
+  // 1. 이름으로 1차 DB 후보군 추출
+  let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
-    return pName.length >= 2 && cleanText.includes(pName)
+    return pName.includes(cleanName) || cleanName.includes(pName)
   })
 
-  // 텍스트 미포함 시 한글 2~4자 단어 추출 매칭
-  if (matchingPlayers.length === 0) {
-    const words = rawText.match(/[가-힣]{2,4}/g) || []
-    for (const w of words) {
-      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
-      if (found.length > 0) {
-        matchingPlayers = found
-        break
-      }
-    }
-  }
+  if (candidates.length === 0) return null
+  if (candidates.length === 1) return candidates[0]
 
-  if (matchingPlayers.length === 0) return null
-  if (matchingPlayers.length === 1) return matchingPlayers[0]
-
-  // 2. 등급 판별: OCR 텍스트 확인 + 뱃지 색상(RGB) 결합
-  const upperText = rawText.toUpperCase()
-  const gradeKeys = ['DGN', 'TOP', 'HIT', 'ACE', 'GGY', 'MMVP', 'ROY', 'TEA', 'GG', 'ASG', 'SEA', 'POS', 'NT']
+  // 2. 뱃지 텍스트 파싱 (유연한 오타 허용)
+  const upperBadge = badgeText.toUpperCase().replace(/\s+/g, '')
   let detectedGrade = ''
+  if (upperBadge.match(/HIT|H1T|H!T|히트/)) detectedGrade = 'HIT'
+  else if (upperBadge.match(/TOP|T0P|탑/)) detectedGrade = 'TOP'
+  else if (upperBadge.match(/DGN|DIGNITY|디그/)) detectedGrade = 'DGN'
+  else if (upperBadge.match(/ACE|에이스/)) detectedGrade = 'ACE'
+  else if (upperBadge.match(/GGY|연도골글|연글/)) detectedGrade = 'GGY'
+  else if (upperBadge.match(/GG|골글/)) detectedGrade = 'GG'
+  else if (upperBadge.match(/MMVP|MVP/)) detectedGrade = 'MMVP'
 
-  for (const g of gradeKeys) {
-    if (upperText.includes(g)) {
-      detectedGrade = g
-      break
-    }
-  }
-
-  // 글자 인식이 누락되었거나(양준혁, 김성한 등) 불확실하면 색상 판별 결과 적용
-  if (!detectedGrade && colorGrade) {
-    detectedGrade = colorGrade
-  }
-  // 색상이 명확한 HIT/TOP인 경우 잘못된 OCR 텍스트 덮어쓰기
-  if (colorGrade && ['HIT', 'TOP'].includes(colorGrade)) {
-    detectedGrade = colorGrade
-  }
-
-  let candidates = matchingPlayers
   if (detectedGrade) {
     const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
     if (gradeFiltered.length > 0) candidates = gradeFiltered
   }
-
-  // 등급 필터링으로 1명만 남았다면 즉시 확정 (양준혁 '99 HIT 등)
   if (candidates.length === 1) return candidates[0]
 
-  // 3. 연도 인식 및 지능형 오인식(83 <-> 88 등) 보정
-  const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
-  const detectedYear = yearMatches ? yearMatches[yearMatches.length - 1] : ''
+  // 3. 연도 매칭 (숫자 3 <-> 8 보정 포함)
+  const yearMatch = upperBadge.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/)
+  const detectedYear = yearMatch ? yearMatch[1] : ''
 
   if (detectedYear) {
-    // 3-1. 정확히 일치하는 연도 우선 탐색
-    const exactYear = candidates.filter(p => {
-      const years = getArray(p.year).map(y => String(y).trim())
-      return years.some(y => y.endsWith(detectedYear))
-    })
-    if (exactYear.length > 0) return exactYear[0]
+    const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
+    if (exact.length > 0) return exact[0]
 
-    // 3-2. 일치 연도가 없을 시 3 <-> 8, 0 <-> 8 등 유사 숫자 가중치 점수 계산
-    let bestCand = candidates[0]
-    let maxScore = -1
-
-    candidates.forEach(cand => {
-      const candYears = getArray(cand.year).map(y => String(y).trim().slice(-2))
-      candYears.forEach(cy => {
-        let score = 0
-        for (let i = 0; i < 2; i++) {
-          const dC = detectedYear[i]
-          const cC = cy[i]
-          if (dC === cC) score += 50
-          else if ((dC === '8' && cC === '3') || (dC === '3' && cC === '8')) score += 45 // 83 <-> 88 교정
-          else if ((dC === '0' && cC === '8') || (dC === '8' && cC === '0')) score += 30
-          else if ((dC === '1' && cC === '7') || (dC === '7' && cC === '1')) score += 30
-        }
-        if (score > maxScore) {
-          maxScore = score
-          bestCand = cand
-        }
-      })
-    })
-
-    if (maxScore > 0) return bestCand
+    // 83이 88로 오인식된 경우 (또는 그 반대)
+    const altYear = detectedYear.endsWith('8') ? detectedYear.slice(0, 1) + '3' : detectedYear.endsWith('3') ? detectedYear.slice(0, 1) + '8' : ''
+    if (altYear) {
+      const altMatch = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(altYear)))
+      if (altMatch.length > 0) return altMatch[0]
+    }
   }
 
   // 4. 포지션 적합성 검증
@@ -2112,7 +2064,7 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = 'OCR 엔진을 시작하고 있습니다...'
+    ocrProgressText.value = 'OCR 엔진을 초기화하고 있습니다...'
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
@@ -2123,16 +2075,26 @@ const handleOcrUpload = async (event: Event) => {
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
       const slot = OCR_SLOTS[i]
-      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 카드를 분석하는 중...`
+      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 카드를 인식하는 중...`
 
-      const processed = processCardSlotImage(img, slot)
-      if (!processed) continue
+      const cardX = img.naturalWidth * slot.x
+      const cardY = img.naturalHeight * slot.y
+      const cardW = img.naturalWidth * slot.w
+      const cardH = img.naturalHeight * slot.h
 
-      const { data: { text } } = await worker.recognize(processed.dataUrl)
-      const matchedPlayer = findBestMatchingPlayer(text, processed.colorGrade, slot.pos)
+      // A. 이름 영역 (하단 22% 검은 바)
+      const nameUrl = cropRegion(img, cardX, cardY + cardH * 0.78, cardW, cardH * 0.22, true)
+      // B. 뱃지 영역 (상단 좌측 20%~55%)
+      const badgeUrl = cropRegion(img, cardX, cardY + cardH * 0.20, cardW * 0.75, cardH * 0.35, false)
+
+      if (!nameUrl || !badgeUrl) continue
+
+      const nameRes = await worker.recognize(nameUrl)
+      const badgeRes = await worker.recognize(badgeUrl)
+
+      const matchedPlayer = findBestMatchingPlayer(nameRes.data.text, badgeRes.data.text, slot.pos)
 
       if (matchedPlayer) {
-        // 중복 카드 이전 자리 비우기
         Object.keys(lineup.value).forEach(k => {
           if (lineup.value[k] && isSamePlayer(lineup.value[k]!, matchedPlayer)) {
             lineup.value[k] = null
@@ -2149,7 +2111,7 @@ const handleOcrUpload = async (event: Event) => {
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
-    showToast(`라인업 등록 완료: 총 ${matchedCount}명의 선수가 정확히 배치되었습니다!`, 'success')
+    showToast(`라인업 등록 완료: 총 ${matchedCount}명의 선수가 배치되었습니다!`, 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
@@ -2849,9 +2811,12 @@ const getPlayerImage = (p: Raw | null) => {
                  <div v-for="pos in ['LF', 'CF', 'RF']" :key="pos" @dragover.prevent @drop="onDrop($event, pos)" class="flex-1 max-w-[24%] h-full flex justify-center items-center min-w-0 min-h-0">
                    <div v-if="!lineup[pos]" class="relative h-full max-w-full aspect-[5/7] border border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all border-neutral-300 dark:border-neutral-600 bg-neutral-50/50 dark:bg-neutral-800/30 hover:bg-neutral-100 dark:hover:bg-neutral-700/50 text-neutral-400" :class="{'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30': selectedSlot === pos}" @click="selectSlot(pos)"><span class="text-[12px] font-bold">{{ pos }}</span></div>
                    <div v-else draggable="true" @dragstart="onDragStart($event, pos)" class="relative h-full max-w-full aspect-[5/7] border rounded-xl flex flex-col items-center p-0 cursor-pointer transition-all shadow-sm group overflow-hidden bg-white dark:bg-neutral-800" :class="{'border-indigo-500 ring-2 ring-indigo-400': selectedSlot === pos, 'border-neutral-200 dark:border-neutral-600': selectedSlot !== pos}" @click="selectSlot(pos)">
-                      <div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
-                      <button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>
-                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
+                      <!-- ✅ 수정 후 (× 버튼 바로 위에 🔁 버튼 추가) -->
+<div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
+<button class="absolute top-1.5 right-8 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-indigo-600 flex items-center justify-center text-[11px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm shadow-sm" @click.stop="openCardSwapModal(pos)" title="다른 시즌 카드로 교체">
+  <RefreshCw class="w-3 h-3" />
+</button>
+<button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
                       <img :src="getPlayerImage(lineup[pos])" class="absolute inset-0 w-full h-full object-contain" @error="hideImage" />
                       <div class="absolute bottom-0 inset-x-0 h-[45%] bg-gradient-to-t from-black/95 via-black/50 to-transparent flex flex-col justify-end items-center pb-2 px-1 pointer-events-none">
                          <div class="text-[11px] sm:text-[13px] font-bold text-white w-full flex items-baseline justify-center truncate drop-shadow-md leading-tight">
@@ -2868,9 +2833,12 @@ const getPlayerImage = (p: Raw | null) => {
                  <div v-for="pos in ['3B', 'SS', '2B', '1B']" :key="pos" @dragover.prevent @drop="onDrop($event, pos)" class="flex-1 max-w-[24%] h-full flex justify-center items-center min-w-0 min-h-0">
                    <div v-if="!lineup[pos]" class="relative h-full max-w-full aspect-[5/7] border border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all border-neutral-300 dark:border-neutral-600 bg-neutral-50/50 dark:bg-neutral-800/30 hover:bg-neutral-100 dark:hover:bg-neutral-700/50 text-neutral-400" :class="{'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30': selectedSlot === pos}" @click="selectSlot(pos)"><span class="text-[12px] font-bold">{{ pos }}</span></div>
                    <div v-else draggable="true" @dragstart="onDragStart($event, pos)" class="relative h-full max-w-full aspect-[5/7] border rounded-xl flex flex-col items-center p-0 cursor-pointer transition-all shadow-sm group overflow-hidden bg-white dark:bg-neutral-800" :class="{'border-indigo-500 ring-2 ring-indigo-400': selectedSlot === pos, 'border-neutral-200 dark:border-neutral-600': selectedSlot !== pos}" @click="selectSlot(pos)">
-                      <div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
-                      <button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>
-                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
+                      <!-- ✅ 수정 후 -->
+<div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
+<button class="absolute top-1.5 right-8 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-indigo-600 flex items-center justify-center text-[11px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm shadow-sm" @click.stop="openCardSwapModal(pos)" title="다른 시즌 카드로 교체">
+  <RefreshCw class="w-3 h-3" />
+</button>
+<button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
                       <img :src="getPlayerImage(lineup[pos])" class="absolute inset-0 w-full h-full object-contain" @error="hideImage" />
                       <div class="absolute bottom-0 inset-x-0 h-[45%] bg-gradient-to-t from-black/95 via-black/50 to-transparent flex flex-col justify-end items-center pb-2 px-1 pointer-events-none">
                          <div class="text-[11px] sm:text-[13px] font-bold text-white w-full flex items-baseline justify-center truncate drop-shadow-md leading-tight">
@@ -2888,9 +2856,12 @@ const getPlayerImage = (p: Raw | null) => {
                  <div v-for="pos in ['C', 'DH']" :key="pos" @dragover.prevent @drop="onDrop($event, pos)" class="flex-1 max-w-[24%] h-full flex justify-center items-center min-w-0 min-h-0">
                    <div v-if="!lineup[pos]" class="relative h-full max-w-full aspect-[5/7] border border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer transition-all border-neutral-300 dark:border-neutral-600 bg-neutral-50/50 dark:bg-neutral-800/30 hover:bg-neutral-100 dark:hover:bg-neutral-700/50 text-neutral-400" :class="{'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/30': selectedSlot === pos}" @click="selectSlot(pos)"><span class="text-[12px] font-bold">{{ pos }}</span></div>
                    <div v-else draggable="true" @dragstart="onDragStart($event, pos)" class="relative h-full max-w-full aspect-[5/7] border rounded-xl flex flex-col items-center p-0 cursor-pointer transition-all shadow-sm group overflow-hidden bg-white dark:bg-neutral-800" :class="{'border-indigo-500 ring-2 ring-indigo-400': selectedSlot === pos, 'border-neutral-200 dark:border-neutral-600': selectedSlot !== pos}" @click="selectSlot(pos)">
-                      <div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
-                      <button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>
-                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
+                      <!-- ✅ 수정 후 -->
+<div class="absolute top-2 left-2 text-xs font-black text-white drop-shadow-[0_1px_3px_rgba(0,0,0,1)] z-10">{{ pos }}</div>
+<button class="absolute top-1.5 right-8 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-indigo-600 flex items-center justify-center text-[11px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm shadow-sm" @click.stop="openCardSwapModal(pos)" title="다른 시즌 카드로 교체">
+  <RefreshCw class="w-3 h-3" />
+</button>
+<button class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/50 text-white hover:bg-red-500 flex items-center justify-center text-[14px] opacity-0 group-hover:opacity-100 transition-opacity z-20 backdrop-blur-sm" @click.stop="clearSlot(pos)">×</button>                      <div v-if="playerBuffs[pos]?.battingOrder && !isPitcher(lineup[pos])" class="absolute top-2 left-1/2 -translate-x-1/2 text-[10px] font-bold bg-orange-600 text-white px-2 py-0.5 rounded shadow-md z-10">{{ playerBuffs[pos].battingOrder }}번</div>
                       <img :src="getPlayerImage(lineup[pos])" class="absolute inset-0 w-full h-full object-contain" @error="hideImage" />
                       <div class="absolute bottom-0 inset-x-0 h-[45%] bg-gradient-to-t from-black/95 via-black/50 to-transparent flex flex-col justify-end items-center pb-2 px-1 pointer-events-none">
                          <div class="text-[11px] sm:text-[13px] font-bold text-white w-full flex items-baseline justify-center truncate drop-shadow-md leading-tight">
@@ -3880,6 +3851,70 @@ const getPlayerImage = (p: Raw | null) => {
       <h3 class="text-sm font-black text-white mb-1">인게임 라인업 스캔 중</h3>
       <p class="text-xs font-bold text-amber-400">{{ ocrProgressText }}</p>
       <span class="text-[10px] text-neutral-400 mt-3">기기 사양에 따라 5~10초 정도 소요될 수 있습니다.</span>
+    </div>
+  </div>
+  <!-- 🌟 FC 온라인 스타일: 동일 선수 시즌 교체 모달 🌟 -->
+  <div v-if="showCardSwapModal && swapTargetSlot" class="fixed inset-0 z-[99999] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+    <div class="bg-white dark:bg-neutral-900 w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] border border-neutral-200 dark:border-neutral-700">
+      
+      <!-- 모달 헤더 -->
+      <div class="flex justify-between items-center p-4 border-b border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-black">
+         <div class="flex items-center gap-2">
+            <RefreshCw class="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <h2 class="text-base font-black tracking-tight text-neutral-800 dark:text-white">
+               [{{ lineup[swapTargetSlot]?.name }}] 시즌/등급 교체
+            </h2>
+         </div>
+         <button @click="showCardSwapModal = false" class="text-neutral-400 hover:text-white text-2xl font-bold leading-none">&times;</button>
+      </div>
+
+      <!-- 모달 바디: 카드 목록 -->
+      <div class="p-4 overflow-y-auto custom-scrollbar flex flex-col gap-2.5 bg-neutral-100 dark:bg-neutral-900">
+         <div class="text-[11px] font-bold text-neutral-500 mb-1">
+            원하는 시즌 카드를 클릭하면 즉시 해당 슬롯({{ swapTargetSlot }})에 장착됩니다.
+         </div>
+
+         <div v-for="cand in swapCandidates" :key="cand.id || (cand.name + cand.grade + cand.year)"
+              @click="applyCardSwap(cand)"
+              class="flex items-center justify-between p-2.5 rounded-xl border bg-white dark:bg-neutral-800 cursor-pointer transition-all hover:border-indigo-500 hover:shadow-md"
+              :class="isSamePlayer(lineup[swapTargetSlot]!, cand) ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 ring-1 ring-indigo-400' : 'border-neutral-200 dark:border-neutral-700'">
+            
+            <div class="flex items-center gap-3">
+               <!-- 등급 뱃지 이미지 -->
+               <div class="w-12 h-12 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-700/50 flex items-center justify-center shrink-0 overflow-hidden">
+                  <img v-if="getGradeImage(cand.grade)" :src="getGradeImage(cand.grade)" class="w-10 object-contain" @error="hideImage" />
+                  <span v-else class="text-[9px] font-black text-neutral-400">{{ cand.grade }}</span>
+               </div>
+               
+               <!-- 선수 정보 -->
+               <div class="flex flex-col">
+                  <div class="flex items-center gap-2">
+                     <span class="font-black text-sm text-neutral-900 dark:text-white">{{ cand.name }}</span>
+                     <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-600">
+                        {{ cand.grade }}
+                     </span>
+                     <span v-if="isSamePlayer(lineup[swapTargetSlot]!, cand)" class="text-[10px] font-black text-indigo-600 bg-indigo-100 dark:bg-indigo-900/50 px-1.5 py-0.5 rounded">
+                        현재 장착 중
+                     </span>
+                  </div>
+                  <div class="text-xs text-neutral-500 font-medium mt-0.5 flex items-center gap-1.5">
+                     <span>{{ findTeamName(Array.isArray(cand.team) ? cand.team[0] : cand.team) }}</span>
+                     <span>·</span>
+                     <span class="font-bold text-neutral-700 dark:text-neutral-300">
+                        {{ cand.year ? `'${String(cand.year).replace(/[\[\]]/g, '').slice(-2)}년` : '연도 없음' }}
+                     </span>
+                     <span>·</span>
+                     <span>포지션: {{ getPlayerPositions(cand).join(', ') }}</span>
+                  </div>
+               </div>
+            </div>
+
+            <!-- 교체 버튼 -->
+            <button class="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-black transition-colors shadow-sm shrink-0">
+               선택
+            </button>
+         </div>
+      </div>
     </div>
   </div>
 </template>
