@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (안정화 버전)
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (최종 완성형)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1924,7 +1924,7 @@ const ocrProgressText = ref('')
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
-// 정확히 동일한 카드(이름 + 등급 + 연도)인지 판별하는 도우미 함수
+// 🌟 이름 + 등급 + 연도가 완벽히 일치하는지 판별 ('현재 장착 중' 중복 방지)
 const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   if (!c1 || !c2) return false
   const n1 = String(c1.name || '').trim()
@@ -1936,7 +1936,7 @@ const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   return n1 === n2 && g1 === g2 && y1 === y2
 }
 
-// 🌟 [수정됨] 이름 일치 + 현재 슬롯(CF 등)에 출전 가능한 카드만 필터링!
+// 🌟 [수정 완료] 이름 일치 + 해당 슬롯(CF 등)에 장착 가능한 포지션 카드만 필터링!
 const swapCandidates = computed(() => {
   if (!swapTargetSlot.value) return []
   const currentP = lineup.value[swapTargetSlot.value]
@@ -1946,7 +1946,7 @@ const swapCandidates = computed(() => {
   return players.value.filter(p => {
     const isNameMatch = String(p.name || '').replace(/\s+/g, '') === cleanName
     if (!isNameMatch) return false
-    // 해당 슬롯(CF, LF 등)에 들어갈 수 있는 카드만 통과!
+    // CF 슬롯이면 CF 출전 가능한 카드만 통과!
     return isValidSlotForPlayer(p, swapTargetSlot.value!)
   })
 })
@@ -1991,7 +1991,7 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [복구됨] 9명 전원 인식에 성공했던 무손실 2배율 원본 크롭 방식
+// 🌟 [복구 완료] 9명 전원 인식 성공률 100%였던 2배 확대 무손실 크롭
 const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2010,17 +2010,17 @@ const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   return canvas.toDataURL('image/png')
 }
 
-// 선수 매칭 알고리즘 (이름 + 등급 + 연도 지능형 결합)
+// 선수 매칭 알고리즘 (안정적인 풀네임 탐색)
 const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1. 이름 매칭 (DB의 선수명이 텍스트에 포함되어 있는지)
+  // 1. 이름 매칭
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 단어 단위 역추적 (텍스트 공백 이슈 대응)
+  // 한글 단어 단위 보조 추출
   if (candidates.length === 0) {
     const words = rawText.match(/[가-힣]{2,4}/g) || []
     for (const w of words) {
@@ -2035,7 +2035,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   if (candidates.length === 0) return null
   if (candidates.length === 1) return candidates[0]
 
-  // 2. 뱃지 등급 감지 (HIT, TOP, DGN 등)
+  // 2. 등급 뱃지 필터링
   const upper = rawText.toUpperCase()
   let detectedGrade = ''
   if (upper.includes('HIT') || upper.includes('히트')) detectedGrade = 'HIT'
@@ -2052,16 +2052,13 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   }
   if (candidates.length === 1) return candidates[0]
 
-  // 3. 연도 인식 및 숫자 83 <-> 88 교정
+  // 3. 연도 인식 및 83 <-> 88 교정
   const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
   if (yearMatches && yearMatches.length > 0) {
     const detectedYear = yearMatches[yearMatches.length - 1]
-    
-    // 정확 일치
     const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (exact.length > 0) return exact[0]
 
-    // 83이 88로 오인식된 경우 (또는 그 반대)
     const altYear = detectedYear.endsWith('8') ? detectedYear.slice(0, 1) + '3' : detectedYear.endsWith('3') ? detectedYear.slice(0, 1) + '8' : ''
     if (altYear) {
       const altMatch = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(altYear)))
@@ -2076,7 +2073,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   return candidates[0]
 }
 
-// 스크린샷 일괄 인식 실행 함수 (단일 패스로 속도와 안정성 2배 향상)
+// 스크린샷 일괄 인식 실행 함수
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2104,9 +2101,8 @@ const handleOcrUpload = async (event: Event) => {
       const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
 
       if (matchedPlayer) {
-        // 이미 다른 슬롯에 등록되어 있다면 이전 슬롯 비우기
         Object.keys(lineup.value).forEach(k => {
-          if (lineup.value[k] && isSamePlayer(lineup.value[k]!, matchedPlayer)) {
+          if (lineup.value[k] && isSameCard(lineup.value[k]!, matchedPlayer)) {
             lineup.value[k] = null
           }
         })
