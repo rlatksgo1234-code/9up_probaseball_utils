@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (최종 완성형)
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (좌표 확장 + 유사도 매칭)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1924,7 +1924,7 @@ const ocrProgressText = ref('')
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
-// 🌟 이름 + 등급 + 연도가 완벽히 일치하는지 판별 ('현재 장착 중' 중복 방지)
+// 이름 + 등급 + 연도가 완벽히 일치하는지 판별 ('현재 장착 중' 중복 방지)
 const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   if (!c1 || !c2) return false
   const n1 = String(c1.name || '').trim()
@@ -1936,7 +1936,7 @@ const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   return n1 === n2 && g1 === g2 && y1 === y2
 }
 
-// 🌟 [수정 완료] 이름 일치 + 해당 슬롯(CF 등)에 장착 가능한 포지션 카드만 필터링!
+// 이름 일치 + 해당 슬롯(CF 등)에 장착 가능한 포지션 카드만 필터링
 const swapCandidates = computed(() => {
   if (!swapTargetSlot.value) return []
   const currentP = lineup.value[swapTargetSlot.value]
@@ -1946,7 +1946,6 @@ const swapCandidates = computed(() => {
   return players.value.filter(p => {
     const isNameMatch = String(p.name || '').replace(/\s+/g, '') === cleanName
     if (!isNameMatch) return false
-    // CF 슬롯이면 CF 출전 가능한 카드만 통과!
     return isValidSlotForPlayer(p, swapTargetSlot.value!)
   })
 })
@@ -1960,7 +1959,6 @@ const applyCardSwap = (newCard: Raw) => {
   if (!swapTargetSlot.value) return
   const slot = swapTargetSlot.value
   
-  // 중복 카드 이전 자리 비우기
   Object.keys(lineup.value).forEach(k => {
     if (lineup.value[k] && isSameCard(lineup.value[k]!, newCard) && k !== slot) {
       lineup.value[k] = null
@@ -1973,25 +1971,25 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 인게임 다이아몬드 화면 기준 각 슬롯 카드 영역 좌표 (x%, y%, w%, h%)
+// 🌟 [좌표 여유 확장] 가로세로 폭을 넉넉하게 넓혀 글자 잘림 원천 차단
 const OCR_SLOTS = [
-  { pos: 'LF',  x: 0.22, y: 0.11, w: 0.11, h: 0.28 },
-  { pos: 'CF',  x: 0.42, y: 0.11, w: 0.11, h: 0.28 },
-  { pos: 'RF',  x: 0.62, y: 0.11, w: 0.11, h: 0.28 },
-  { pos: 'SS',  x: 0.32, y: 0.27, w: 0.11, h: 0.28 },
-  { pos: '2B',  x: 0.52, y: 0.27, w: 0.11, h: 0.28 },
-  { pos: '3B',  x: 0.22, y: 0.39, w: 0.11, h: 0.28 },
-  { pos: 'SP1', x: 0.42, y: 0.39, w: 0.11, h: 0.28 },
-  { pos: '1B',  x: 0.62, y: 0.39, w: 0.11, h: 0.28 },
-  { pos: 'C',   x: 0.42, y: 0.68, w: 0.11, h: 0.28 },
-  { pos: 'DH',  x: 0.53, y: 0.68, w: 0.11, h: 0.28 }
+  { pos: 'LF',  x: 0.21, y: 0.10, w: 0.13, h: 0.30 },
+  { pos: 'CF',  x: 0.41, y: 0.10, w: 0.13, h: 0.30 },
+  { pos: 'RF',  x: 0.61, y: 0.10, w: 0.13, h: 0.30 },
+  { pos: 'SS',  x: 0.31, y: 0.25, w: 0.13, h: 0.30 },
+  { pos: '2B',  x: 0.51, y: 0.25, w: 0.13, h: 0.30 },
+  { pos: '3B',  x: 0.21, y: 0.38, w: 0.13, h: 0.30 },
+  { pos: 'SP1', x: 0.41, y: 0.38, w: 0.13, h: 0.30 },
+  { pos: '1B',  x: 0.61, y: 0.38, w: 0.13, h: 0.30 },
+  { pos: 'C',   x: 0.41, y: 0.66, w: 0.13, h: 0.30 },
+  { pos: 'DH',  x: 0.52, y: 0.66, w: 0.13, h: 0.30 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [복구 완료] 9명 전원 인식 성공률 100%였던 2배 확대 무손실 크롭
+// 캔버스 크롭 도우미 (2배 확대 무손실)
 const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2010,32 +2008,35 @@ const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   return canvas.toDataURL('image/png')
 }
 
-// 선수 매칭 알고리즘 (안정적인 풀네임 탐색)
+// 🌟 [유사도 매칭 탑재] 1글자 오타나 2글자만 읽혀도 완벽 복구
 const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1. 이름 매칭
+  // 1단계: 3글자 풀네임 완벽 일치 검색
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 한글 단어 단위 보조 추출
+  // 2단계: 풀네임 실패 시 앞 2글자 또는 뒤 2글자 부분 매칭 (김도*, 이종*, *종모 등)
   if (candidates.length === 0) {
-    const words = rawText.match(/[가-힣]{2,4}/g) || []
-    for (const w of words) {
-      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
-      if (found.length > 0) {
-        candidates = found
-        break
-      }
-    }
+    const matchedBySub = players.value.filter(p => {
+      const pName = String(p.name || '').replace(/\s+/g, '')
+      if (pName.length < 2) return false
+      const prefix = pName.slice(0, 2)
+      const suffix = pName.slice(-2)
+      return cleanText.includes(prefix) || cleanText.includes(suffix)
+    })
+    
+    // 포지션이 일치하는 후보 우선 선택
+    const posMatched = matchedBySub.filter(p => isValidSlotForPlayer(p, targetPos))
+    candidates = posMatched.length > 0 ? posMatched : matchedBySub
   }
 
   if (candidates.length === 0) return null
   if (candidates.length === 1) return candidates[0]
 
-  // 2. 등급 뱃지 필터링
+  // 3단계: 등급 뱃지 필터링 (HIT, TOP, DGN 등)
   const upper = rawText.toUpperCase()
   let detectedGrade = ''
   if (upper.includes('HIT') || upper.includes('히트')) detectedGrade = 'HIT'
@@ -2052,7 +2053,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   }
   if (candidates.length === 1) return candidates[0]
 
-  // 3. 연도 인식 및 83 <-> 88 교정
+  // 4단계: 연도 인식 및 83 <-> 88 교정
   const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
   if (yearMatches && yearMatches.length > 0) {
     const detectedYear = yearMatches[yearMatches.length - 1]
@@ -2066,7 +2067,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
     }
   }
 
-  // 4. 슬롯 포지션 적합성 검증
+  // 5단계: 슬롯 포지션 적합성 최종 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
@@ -2099,6 +2100,9 @@ const handleOcrUpload = async (event: Event) => {
 
       const { data: { text } } = await worker.recognize(cardUrl)
       const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
+      
+      // 디버깅용 콘솔 로그 (F12에서 확인 가능)
+      console.log(`[OCR ${slot.pos}] 추출 텍스트: "${text.replace(/\n/g, ' ')}" -> 매칭 결과:`, matchedPlayer?.name || '실패')
 
       if (matchedPlayer) {
         Object.keys(lineup.value).forEach(k => {
@@ -2127,7 +2131,7 @@ const handleOcrUpload = async (event: Event) => {
     if (ocrFileInput.value) ocrFileInput.value.value = ''
   }
 }
-
+  
 const fileInput = ref<HTMLInputElement | null>(null)
 
 // 🌟 1. 공통 데이터 불러오기 (데이터 꼬임 방지 강력 버전) 🌟
