@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [상단 배지 핀포인트 조준] 듀얼 머지 크롭 엔진 최종 수정
+// 📸 [배지(좌측 중간) + 이름표(하단) 핀포인트 듀얼 머지 크롭]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,43 +2020,50 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 상단 배지/연도 영역 수정: 카드 높이 기준 15% ~ 42% 지점 (HIT/TOP 배지 정중앙 타격)
-  const topSy = cardY + (cardH * 0.15)
-  const topSh = cardH * 0.27
+  // 🌟 1. 등급 배지 영역 (카드 좌측 중간: x는 10%~48%, y는 35%~52%)
+  const badgeX = cardX + (cardW * 0.10)
+  const badgeY = cardY + (cardH * 0.35)
+  const badgeW = cardW * 0.38
+  const badgeH = cardH * 0.17
 
-  // 🌟 2. 하단 이름표 영역: 기존에 완벽했던 하단 72% ~ 98% 유지
-  const botSy = cardY + (cardH * 0.72)
-  const botSh = cardH * 0.26
+  // 🌟 2. 하단 이름표 영역 (카드 하단 중앙: x는 10%~90%, y는 76%~96%)
+  const nameX = cardX + (cardW * 0.10)
+  const nameY = cardY + (cardH * 0.76)
+  const nameW = cardW * 0.80
+  const nameH = cardH * 0.20
 
   const scale = 3
-  const destW = Math.round(cardW * scale)
-  const topH_scaled = Math.round(topSh * scale)
-  const botH_scaled = Math.round(botSh * scale)
+  const badgeW_scaled = Math.round(badgeW * scale)
+  const badgeH_scaled = Math.round(badgeH * scale)
+  const nameW_scaled = Math.round(nameW * scale)
+  const nameH_scaled = Math.round(nameH * scale)
+  const destW = Math.max(badgeW_scaled, nameW_scaled)
 
   canvas.width = destW
-  canvas.height = topH_scaled + botH_scaled + 20
+  canvas.height = badgeH_scaled + nameH_scaled + 20 // 위아래 간격 20px
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.fillStyle = '#111111'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단 배지 붙이기 (이제 썸네일 위쪽에 HIT 83, TOP 배지가 선명하게 나옵니다)
-  ctx.drawImage(image, cardX, topSy, cardW, topSh, 0, 0, destW, topH_scaled)
-  // 하단 이름표 붙이기
-  ctx.drawImage(image, cardX, botSy, cardW, botSh, 0, topH_scaled + 20, destW, botH_scaled)
+  // 상단/중앙에 위치한 등급 배지 붙이기
+  ctx.drawImage(image, badgeX, badgeY, badgeW, badgeH, 0, 0, badgeW_scaled, badgeH_scaled)
+  
+  // 하단 이름표 붙이기 (배지 바로 아래에 이어붙이기)
+  ctx.drawImage(image, nameX, nameY, nameW, nameH, 0, badgeH_scaled + 20, nameW_scaled, nameH_scaled)
 
-  // 디버그용 이름표 단독 썸네일
+  // 디버그 인스펙터용 '이름표 단독 썸네일'
   const nameCanvas = document.createElement('canvas')
   const nameCtx = nameCanvas.getContext('2d')
-  nameCanvas.width = destW
-  nameCanvas.height = botH_scaled
+  nameCanvas.width = nameW_scaled
+  nameCanvas.height = nameH_scaled
   if (nameCtx) {
     nameCtx.imageSmoothingEnabled = true
     nameCtx.imageSmoothingQuality = 'high'
     nameCtx.fillStyle = '#111111'
     nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
-    nameCtx.drawImage(image, cardX, botSy, cardW, botSh, 0, 0, destW, botH_scaled)
+    nameCtx.drawImage(image, nameX, nameY, nameW, nameH, 0, 0, nameW_scaled, nameH_scaled)
   }
 
   return {
