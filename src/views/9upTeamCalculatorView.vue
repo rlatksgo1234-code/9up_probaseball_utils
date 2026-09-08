@@ -1914,97 +1914,6 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [분리 크롭 & 듀얼 머지 엔진] 얼굴/전투력 숫자 100% 차단
-// ========================================================
-const ocrFileInput = ref<HTMLInputElement | null>(null)
-const isOcrProcessing = ref(false)
-const ocrProgressText = ref('')
-
-interface OcrDebugItem {
-  slot: string
-  imgUrl: string
-  rawText: string
-  matchedName: string | null
-  matchedCard: string | null
-}
-const ocrDebugList = ref<OcrDebugItem[]>([])
-
-// FC 온라인식 카드 교체 모달 상태
-const showCardSwapModal = ref(false)
-const swapTargetSlot = ref<string | null>(null)
-
-const isSameCard = (c1: Raw | null, c2: Raw | null) => {
-  if (!c1 || !c2) return false
-  const n1 = String(c1.name || '').trim()
-  const n2 = String(c2.name || '').trim()
-  const g1 = getMappedGrade(c1.grade)
-  const g2 = getMappedGrade(c2.grade)
-  const y1 = String(c1.year || '').replace(/[\[\]\s]/g, '')
-  const y2 = String(c2.year || '').replace(/[\[\]\s]/g, '')
-  return n1 === n2 && g1 === g2 && y1 === y2
-}
-
-const swapCandidates = computed(() => {
-  if (!swapTargetSlot.value) return []
-  const currentP = lineup.value[swapTargetSlot.value]
-  if (!currentP) return []
-  const cleanName = String(currentP.name || '').replace(/\s+/g, '')
-  
-  return players.value.filter(p => {
-    const isNameMatch = String(p.name || '').replace(/\s+/g, '') === cleanName
-    if (!isNameMatch) return false
-    return isValidSlotForPlayer(p, swapTargetSlot.value!)
-  })
-})
-
-const openCardSwapModal = (slot: string) => {
-  swapTargetSlot.value = slot
-  showCardSwapModal.value = true
-}
-
-const applyCardSwap = (newCard: Raw) => {
-  if (!swapTargetSlot.value) return
-  const slot = swapTargetSlot.value
-  
-  Object.keys(lineup.value).forEach(k => {
-    if (lineup.value[k] && isSameCard(lineup.value[k]!, newCard) && k !== slot) {
-      lineup.value[k] = null
-    }
-  })
-
-  lineup.value[slot] = newCard
-  initPlayerBuff(slot, newCard)
-  showToast(`[${newCard.name}] 카드가 성공적으로 교체되었습니다!`, 'success')
-  showCardSwapModal.value = false
-}
-
-// ========================================================
-// 📸 [황금 대칭 좌표계 복원] 듀얼 머지 크롭 엔진
-// ========================================================
-const OCR_SLOTS = [
-  // 1열 (외야): 좌 - 중 - 우
-  { pos: 'LF', x: 0.215, y: 0.10, w: 0.145, h: 0.32 },
-  { pos: 'CF', x: 0.415, y: 0.10, w: 0.145, h: 0.32 },
-  { pos: 'RF', x: 0.615, y: 0.10, w: 0.145, h: 0.32 },
-
-  // 2열 (키스톤): 유격 - 2루
-  { pos: 'SS', x: 0.315, y: 0.26, w: 0.145, h: 0.32 },
-  { pos: '2B', x: 0.515, y: 0.26, w: 0.145, h: 0.32 },
-
-  // 3열 (코너): 3루 - 1루
-  { pos: '3B', x: 0.215, y: 0.39, w: 0.145, h: 0.32 },
-  { pos: '1B', x: 0.615, y: 0.39, w: 0.145, h: 0.32 },
-
-  // 4열 (하단): 포수 - 지명타자
-  { pos: 'C',  x: 0.415, y: 0.67, w: 0.145, h: 0.32 },
-  { pos: 'DH', x: 0.525, y: 0.67, w: 0.145, h: 0.32 }
-]
-
-const triggerOcrInput = () => {
-  ocrFileInput.value?.click()
-}
-
-// ========================================================
 // 📸 [좌측 확장 및 우측 컷팅 정밀 좌표계 & 단일 통합 크롭 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
@@ -2071,7 +1980,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
 }
 
 // ========================================================
-// 📸 [스크린샷 일괄 등록 및 단일 통합 화이트리스트 OCR 실행]
+// 📸 [스크린샷 일괄 등록 및 안정적인 단일 화이트리스트 OCR 실행]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -2088,12 +1997,13 @@ const handleOcrUpload = async (event: Event) => {
     await img.decode()
 
     const worker = await createWorker('kor+eng')
-    let matchedCount = 0
 
-    // 🌟 1. 루프 밖에서 단일 통합 화이트리스트를 딱 한 번만 설정하여 엔진 상태 꼬임 원천 방지
+    // 🌟 워커가 생성된 직후 안전하게 단일 화이트리스트 적용
     await worker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
     })
+
+    let matchedCount = 0
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
       const slot = OCR_SLOTS[i]
