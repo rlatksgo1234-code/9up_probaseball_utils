@@ -1914,7 +1914,98 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [좌측 확장 및 우측 컷팅 정밀 좌표계 & 단일 통합 크롭 엔진]
+// 📸 [분리 크롭 & 듀얼 머지 엔진] 얼굴/전투력 숫자 100% 차단
+// ========================================================
+const ocrFileInput = ref<HTMLInputElement | null>(null)
+const isOcrProcessing = ref(false)
+const ocrProgressText = ref('')
+
+interface OcrDebugItem {
+  slot: string
+  imgUrl: string
+  rawText: string
+  matchedName: string | null
+  matchedCard: string | null
+}
+const ocrDebugList = ref<OcrDebugItem[]>([])
+
+// FC 온라인식 카드 교체 모달 상태
+const showCardSwapModal = ref(false)
+const swapTargetSlot = ref<string | null>(null)
+
+const isSameCard = (c1: Raw | null, c2: Raw | null) => {
+  if (!c1 || !c2) return false
+  const n1 = String(c1.name || '').trim()
+  const n2 = String(c2.name || '').trim()
+  const g1 = getMappedGrade(c1.grade)
+  const g2 = getMappedGrade(c2.grade)
+  const y1 = String(c1.year || '').replace(/[\[\]\s]/g, '')
+  const y2 = String(c2.year || '').replace(/[\[\]\s]/g, '')
+  return n1 === n2 && g1 === g2 && y1 === y2
+}
+
+const swapCandidates = computed(() => {
+  if (!swapTargetSlot.value) return []
+  const currentP = lineup.value[swapTargetSlot.value]
+  if (!currentP) return []
+  const cleanName = String(currentP.name || '').replace(/\s+/g, '')
+  
+  return players.value.filter(p => {
+    const isNameMatch = String(p.name || '').replace(/\s+/g, '') === cleanName
+    if (!isNameMatch) return false
+    return isValidSlotForPlayer(p, swapTargetSlot.value!)
+  })
+})
+
+const openCardSwapModal = (slot: string) => {
+  swapTargetSlot.value = slot
+  showCardSwapModal.value = true
+}
+
+const applyCardSwap = (newCard: Raw) => {
+  if (!swapTargetSlot.value) return
+  const slot = swapTargetSlot.value
+  
+  Object.keys(lineup.value).forEach(k => {
+    if (lineup.value[k] && isSameCard(lineup.value[k]!, newCard) && k !== slot) {
+      lineup.value[k] = null
+    }
+  })
+
+  lineup.value[slot] = newCard
+  initPlayerBuff(slot, newCard)
+  showToast(`[${newCard.name}] 카드가 성공적으로 교체되었습니다!`, 'success')
+  showCardSwapModal.value = false
+}
+
+// ========================================================
+// 📸 [황금 대칭 좌표계 복원] 듀얼 머지 크롭 엔진
+// ========================================================
+const OCR_SLOTS = [
+  // 1열 (외야): 좌 - 중 - 우
+  { pos: 'LF', x: 0.215, y: 0.10, w: 0.145, h: 0.32 },
+  { pos: 'CF', x: 0.415, y: 0.10, w: 0.145, h: 0.32 },
+  { pos: 'RF', x: 0.615, y: 0.10, w: 0.145, h: 0.32 },
+
+  // 2열 (키스톤): 유격 - 2루
+  { pos: 'SS', x: 0.315, y: 0.26, w: 0.145, h: 0.32 },
+  { pos: '2B', x: 0.515, y: 0.26, w: 0.145, h: 0.32 },
+
+  // 3열 (코너): 3루 - 1루
+  { pos: '3B', x: 0.215, y: 0.39, w: 0.145, h: 0.32 },
+  { pos: '1B', x: 0.615, y: 0.39, w: 0.145, h: 0.32 },
+
+  // 4열 (하단): 포수 - 지명타자
+  { pos: 'C',  x: 0.415, y: 0.67, w: 0.145, h: 0.32 },
+  { pos: 'DH', x: 0.525, y: 0.67, w: 0.145, h: 0.32 }
+]
+
+const triggerOcrInput = () => {
+  ocrFileInput.value?.click()
+}
+
+// ========================================================
+// 📸 [정밀 X/Y 좌표 조율 & 원본 화질 통합 크롭 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -1929,13 +2020,13 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 상단 배지 영역: 왼쪽을 더 많이 보이게(0.14), 오른쪽 불필요한 부분을 쳐내기 위해 너비 축소(0.32)
-  const badgeX = cardX + (cardW * 0.14)
+  // 🌟 1. 상단 배지 영역: X축을 우측으로 살짝 이동(0.18), Y축을 내려서(0.40) 윗 여백 컷
+  const badgeX = cardX + (cardW * 0.18)
   const badgeY = cardY + (cardH * 0.40)
-  const badgeW = cardW * 0.32
+  const badgeW = cardW * 0.40
   const badgeH = cardH * 0.16
 
-  // 🌟 2. 하단 이름표 영역: Y축 (0.73)
+  // 🌟 2. 하단 이름표 영역: Y축을 살짝 올려서(0.73) 위쪽 여유 확보 및 하단 컷
   const nameX = cardX + (cardW * 0.12)
   const nameY = cardY + (cardH * 0.73)
   const nameW = cardW * 0.65
@@ -1958,7 +2049,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   ctx.fillStyle = '#000000' // 완전한 검은색 배경
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단에 등급 배지 그리기
+  // 상단에 등급 배지 그리기 (전처리 없이 고해상도 원본 유지)
   ctx.drawImage(
     image, badgeX, badgeY, badgeW, badgeH, 
     padding + Math.round((destW - badgeW_scaled - (padding * 2)) / 2), 
@@ -1966,7 +2057,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     badgeW_scaled, badgeH_scaled
   )
   
-  // 하단에 이름표 그리기
+  // 하단에 이름표 그리기 (전처리 없이 고해상도 원본 유지)
   ctx.drawImage(
     image, nameX, nameY, nameW, nameH, 
     padding + Math.round((destW - nameW_scaled - (padding * 2)) / 2), 
@@ -1980,7 +2071,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
 }
 
 // ========================================================
-// 📸 [스크린샷 일괄 등록 및 안정적인 단일 화이트리스트 OCR 실행]
+// 📸 [스크린샷 일괄 등록 및 단일 통합 화이트리스트 OCR 실행]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -1997,12 +2088,6 @@ const handleOcrUpload = async (event: Event) => {
     await img.decode()
 
     const worker = await createWorker('kor+eng')
-
-    // 🌟 워커가 생성된 직후 안전하게 단일 화이트리스트 적용
-    await worker.setParameters({
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
-    })
-
     let matchedCount = 0
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
@@ -2011,6 +2096,11 @@ const handleOcrUpload = async (event: Event) => {
 
       const { dualUrl } = cropDualCardImages(img, slot)
       if (!dualUrl) continue
+
+      // 🌟 단일 통합 화이트리스트 적용 (영문, 숫자, 한글, 공백 허용 - 워커 꼬임 방지)
+      await worker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
+      })
 
       const { data: { text } } = await worker.recognize(dualUrl)
       const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
