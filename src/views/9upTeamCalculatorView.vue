@@ -1978,26 +1978,33 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [카드 전체 바운딩 박스 정의] 
+// ========================================================
+// 📸 [황금 대칭 좌표계 복원] 듀얼 머지 크롭 엔진
+// ========================================================
 const OCR_SLOTS = [
-  { pos: 'LF', x: 0.190, y: 0.115, w: 0.160, h: 0.35 },
-  { pos: 'CF', x: 0.395, y: 0.115, w: 0.160, h: 0.35 },
-  { pos: 'RF', x: 0.600, y: 0.115, w: 0.160, h: 0.35 },
-  { pos: 'SS', x: 0.295, y: 0.260, w: 0.160, h: 0.35 },
-  { pos: '2B', x: 0.495, y: 0.260, w: 0.160, h: 0.35 },
-  { pos: '3B', x: 0.190, y: 0.390, w: 0.160, h: 0.35 },
-  { pos: '1B', x: 0.600, y: 0.390, w: 0.160, h: 0.35 },
-  { pos: 'C',  x: 0.395, y: 0.670, w: 0.160, h: 0.35 },
-  { pos: 'DH', x: 0.510, y: 0.670, w: 0.160, h: 0.35 }
+  // 1열 (외야): 좌 - 중 - 우
+  { pos: 'LF', x: 0.215, y: 0.10, w: 0.145, h: 0.32 },
+  { pos: 'CF', x: 0.415, y: 0.10, w: 0.145, h: 0.32 },
+  { pos: 'RF', x: 0.615, y: 0.10, w: 0.145, h: 0.32 },
+
+  // 2열 (키스톤): 유격 - 2루
+  { pos: 'SS', x: 0.315, y: 0.26, w: 0.145, h: 0.32 },
+  { pos: '2B', x: 0.515, y: 0.26, w: 0.145, h: 0.32 },
+
+  // 3열 (코너): 3루 - 1루
+  { pos: '3B', x: 0.215, y: 0.39, w: 0.145, h: 0.32 },
+  { pos: '1B', x: 0.615, y: 0.39, w: 0.145, h: 0.32 },
+
+  // 4열 (하단): 포수 - 지명타자
+  { pos: 'C',  x: 0.415, y: 0.67, w: 0.145, h: 0.32 },
+  { pos: 'DH', x: 0.525, y: 0.67, w: 0.145, h: 0.32 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// ========================================================
-// 📸 [정밀 고정 좌표계] 상단 배지 + 하단 이름표 듀얼 머지 크롭 엔진
-// ========================================================
+// 🌟 검증된 카드 박스 기준 [상단 배지 + 하단 이름표] 듀얼 머지 크롭
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2006,49 +2013,38 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const imgW = image.naturalWidth
   const imgH = image.naturalHeight
 
-  // 1. 해당 슬롯 카드 전체의 절대 픽셀 영역
   const cardX = imgW * slot.x
   const cardY = imgH * slot.y
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 2. 상단 배지/연도 영역 (카드 전체 높이 기준 상단 10% ~ 32 지점)
-  const topBadgeY = cardY + (cardH * 0.10)
-  const topBadgeH = cardH * 0.22
+  // 1. 상단 배지/연도 영역 (카드 높이 기준 상단 5% ~ 32%)
+  const topSy = cardY + (cardH * 0.05)
+  const topSh = cardH * 0.27
 
-  // 3. 하단 이름표 영역 (카드 전체 높이 기준 하단 76% ~ 96 지점)
-  const bottomNameY = cardY + (cardH * 0.76)
-  const bottomNameH = cardH * 0.20
+  // 2. 하단 이름표 영역 (카드 높이 기준 하단 72% ~ 98%)
+  const botSy = cardY + (cardH * 0.72)
+  const botSh = cardH * 0.26
 
-  const scale = 3 // 화질 선명도를 위한 3배 확대
+  const scale = 3
   const destW = Math.round(cardW * scale)
-  const topH_scaled = Math.round(topBadgeH * scale)
-  const botH_scaled = Math.round(bottomNameH * scale)
+  const topH_scaled = Math.round(topSh * scale)
+  const botH_scaled = Math.round(botSh * scale)
 
-  // 두 조각을 위아래로 합칠 통합 캔버스 생성
   canvas.width = destW
-  canvas.height = topH_scaled + botH_scaled + 20 // 사이에 20px 여백
+  canvas.height = topH_scaled + botH_scaled + 20
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.fillStyle = '#111111'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단 배지(시즌/연도) 복사 붙여넣기
-  ctx.drawImage(
-    image, 
-    cardX, topBadgeY, cardW, topBadgeH, 
-    0, 0, destW, topH_scaled
-  )
+  // 상단 배지 붙이기
+  ctx.drawImage(image, cardX, topSy, cardW, topSh, 0, 0, destW, topH_scaled)
+  // 하단 이름표 붙이기
+  ctx.drawImage(image, cardX, botSy, cardW, botSh, 0, topH_scaled + 20, destW, botH_scaled)
 
-  // 하단 이름표 복사 붙여넣기 (상단 바로 아래에 이어붙이기)
-  ctx.drawImage(
-    image, 
-    cardX, bottomNameY, cardW, bottomNameH, 
-    0, topH_scaled + 20, destW, botH_scaled
-  )
-
-  // 디버그 인스펙터 화면에 띄울 '하단 이름표 단독 썸네일' 캔버스
+  // 디버그용 이름표 단독 썸네일
   const nameCanvas = document.createElement('canvas')
   const nameCtx = nameCanvas.getContext('2d')
   nameCanvas.width = destW
@@ -2058,7 +2054,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     nameCtx.imageSmoothingQuality = 'high'
     nameCtx.fillStyle = '#111111'
     nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
-    nameCtx.drawImage(image, cardX, bottomNameY, cardW, bottomNameH, 0, 0, destW, botH_scaled)
+    nameCtx.drawImage(image, cardX, botSy, cardW, botSh, 0, 0, destW, botH_scaled)
   }
 
   return {
