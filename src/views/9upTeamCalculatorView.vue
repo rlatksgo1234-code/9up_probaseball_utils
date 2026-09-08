@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [황금 대칭 좌표계 복원 & 단일 통합 크롭 엔진]
+// 📸 [이진화 필터가 적용된 정밀 크롭 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,7 +2020,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 정밀 좌우 좌표 및 Y축 세팅 (왼쪽 잘림 방지 및 오른쪽 불필요 여백 컷팅)
+  // 🌟 상단 배지 및 하단 이름표 정밀 좌표
   const badgeX = cardX + (cardW * 0.14)
   const badgeY = cardY + (cardH * 0.40)
   const badgeW = cardW * 0.32
@@ -2062,98 +2062,27 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     nameW_scaled, nameH_scaled
   )
 
+  // 🌟 [핵심 추가] 캔버스 픽셀 이진화(Thresholding) 처리
+  // 배경 노이즈를 날리고 글자 가독성을 극대화합니다.
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const data = imgData.data
+  for (let i = 0; i < data.length; i += 4) {
+    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
+    const threshold = 140 // 밝기 기준점 (상황에 따라 조절 가능)
+    const val = avg > threshold ? 255 : 0
+    data[i]     = val
+    data[i + 1] = val
+    data[i + 2] = val
+  }
+  ctx.putImageData(imgData, 0, 0)
+
   return {
     dualUrl: canvas.toDataURL('image/png')
   }
 }
 
 // ========================================================
-// 📸 [카드 매칭 및 인식 엔진 (processCardSlot)]
-// ========================================================
-const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
-  const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
-
-  const batterList = players.value.filter(p => !['SP', 'RP', 'CP'].includes(String(p.position).toUpperCase()))
-
-  let matchedName = ''
-  for (const p of batterList) {
-    const pName = String(p.name || '').trim()
-    if (pName.length >= 2 && cleanText.includes(pName)) {
-      matchedName = pName
-      break
-    }
-  }
-
-  if (!matchedName) {
-    for (const p of batterList) {
-      const pName = String(p.name || '').trim()
-      if (pName.length === 3 && cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
-        matchedName = pName
-        break
-      }
-    }
-  }
-
-  if (!matchedName) return { player: null, name: null }
-
-  const candidates = batterList.filter(p => String(p.name || '').trim() === matchedName)
-  if (candidates.length <= 1) return { player: candidates[0] || null, name: matchedName }
-
-  const upperRaw = rawText.toUpperCase()
-  const detectedYears: string[] = []
-  const quoted = rawText.match(/['’](\d{2})/)
-  if (quoted) detectedYears.push(quoted[1])
-  const yearMatches = Array.from(rawText.matchAll(/\b([89012]\d)\b/g))
-  for (const m of yearMatches) {
-    if (!detectedYears.includes(m[1])) detectedYears.push(m[1])
-  }
-
-  let detectedGrade = ''
-  if (/(?:HIT|H1T|H!T|H\|T|HT|HI7|히트)/i.test(upperRaw)) {
-    detectedGrade = 'HIT'
-  } else if (/(?:TOP|T0P|TDP|TOR|10P|탑)/i.test(upperRaw)) {
-    detectedGrade = 'TOP'
-  } else if (/(?:DGN|디그|D6N|IGN|OGN)/i.test(upperRaw)) {
-    detectedGrade = 'DGN'
-  } else if (/(?:GOLDEN|GLOVE|GG|골글)/i.test(upperRaw)) {
-    detectedGrade = 'GG'
-  }
-
-  let bestCard = candidates[0]
-  let maxScore = -999
-
-  for (const card of candidates) {
-    let score = 0
-    const cardGrade = getMappedGrade(card.grade)
-    const cardYears = getArray(card.year).map(y => String(y).replace(/\D/g, '').slice(-2))
-
-    if (detectedGrade) {
-      if (cardGrade === detectedGrade) score += 40
-      else score -= 20
-    } else {
-      if (cardGrade === 'HIT' || cardGrade === 'TOP') score += 10
-      else if (cardGrade === 'DGN') score -= 10
-    }
-
-    if (detectedYears.length > 0 && cardYears.some(y => detectedYears.includes(y))) {
-      score += 50
-    }
-
-    if (isValidSlotForPlayer(card, targetPos)) {
-      score += 5
-    }
-
-    if (score > maxScore) {
-      maxScore = score
-      bestCard = card
-    }
-  }
-
-  return { player: bestCard, name: matchedName }
-}
-
-// ========================================================
-// 📸 [스크린샷 일괄 등록 및 안정적인 OCR 실행]
+// 📸 [PSM 7번 모드가 적용된 OCR 실행 함수]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -2170,6 +2099,13 @@ const handleOcrUpload = async (event: Event) => {
     await img.decode()
 
     const worker = await createWorker('kor+eng')
+
+    // 🌟 PSM 7번(단일 텍스트 라인 모드) 및 화이트리스트 동시 적용
+    await worker.setParameters({
+      tessedit_pageseg_mode: '7',
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
+    })
+
     let matchedCount = 0
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
