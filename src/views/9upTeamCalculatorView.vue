@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [얼굴 100% 배제 / 배지~이름표 콤팩트 직사각형 크롭]
+// 📸 [분리 크롭 & 듀얼 머지 엔진] 얼굴/전투력 숫자 100% 차단
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1978,59 +1978,87 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [배지+이름표 핀포인트 좌표계] 얼굴을 버리고 배지~이름 바(h: 0.16)만 납작하게 캡처
+// 🌟 [카드 전체 바운딩 박스 정의] 
 const OCR_SLOTS = [
-  // 1열 (외야): 배지 시작선(y: 0.245)부터 이름표 바닥까지
-  { pos: 'LF', x: 0.195, y: 0.245, w: 0.155, h: 0.165 },
-  { pos: 'CF', x: 0.395, y: 0.245, w: 0.155, h: 0.165 },
-  { pos: 'RF', x: 0.595, y: 0.245, w: 0.155, h: 0.165 },
-
-  // 2열 (키스톤): 유격 - 2루
-  { pos: 'SS', x: 0.295, y: 0.395, w: 0.155, h: 0.165 },
-  { pos: '2B', x: 0.495, y: 0.395, w: 0.155, h: 0.165 },
-
-  // 3열 (코너): 3루 - 1루
-  { pos: '3B', x: 0.195, y: 0.525, w: 0.155, h: 0.165 },
-  { pos: '1B', x: 0.595, y: 0.525, w: 0.155, h: 0.165 },
-
-  // 4열 (하단): 포수 - 지명타자
-  { pos: 'C',  x: 0.395, y: 0.805, w: 0.155, h: 0.165 },
-  { pos: 'DH', x: 0.510, y: 0.805, w: 0.155, h: 0.165 }
+  { pos: 'LF', x: 0.190, y: 0.115, w: 0.160, h: 0.35 },
+  { pos: 'CF', x: 0.395, y: 0.115, w: 0.160, h: 0.35 },
+  { pos: 'RF', x: 0.600, y: 0.115, w: 0.160, h: 0.35 },
+  { pos: 'SS', x: 0.295, y: 0.260, w: 0.160, h: 0.35 },
+  { pos: '2B', x: 0.495, y: 0.260, w: 0.160, h: 0.35 },
+  { pos: '3B', x: 0.190, y: 0.390, w: 0.160, h: 0.35 },
+  { pos: '1B', x: 0.600, y: 0.390, w: 0.160, h: 0.35 },
+  { pos: 'C',  x: 0.395, y: 0.670, w: 0.160, h: 0.35 },
+  { pos: 'DH', x: 0.510, y: 0.670, w: 0.160, h: 0.35 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 3배 무손실 흑백 대비 최적화 크롭
-const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]): string | null => {
+// 🌟 [분리 크롭 & 듀얼 머지] 상단 배지 영역과 하단 이름표 영역만 추출 후 세로로 결합
+const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
-  if (!ctx) return null
+  if (!ctx) return { dualUrl: null, nameUrl: null }
 
-  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
-  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
-  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
-  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
+  const boxX = Math.round(image.naturalWidth * slot.x)
+  const boxY = Math.round(image.naturalHeight * slot.y)
+  const boxW = Math.round(image.naturalWidth * slot.w)
+  const boxH = Math.round(image.naturalHeight * slot.h)
 
-  // 글자 시인성을 위해 3배 확대
-  canvas.width = Math.round(sw * 3)
-  canvas.height = Math.round(sh * 3)
+  // 1. 상단 배지/연도 영역 (카드 상단 5% ~ 30%)
+  const badgeSy = boxY + Math.round(boxH * 0.05)
+  const badgeSh = Math.round(boxH * 0.25)
+
+  // 2. 하단 이름표 영역 (카드 하단 75% ~ 97%)
+  const nameSy = boxY + Math.round(boxH * 0.75)
+  const nameSh = Math.round(boxH * 0.22)
+
+  const targetW = Math.round(boxW * 3)
+  const badgeHScaled = Math.round(badgeSh * 3)
+  const nameHScaled = Math.round(nameSh * 3)
+
+  // 두 영역을 위아래로 붙일 캔버스
+  canvas.width = targetW
+  canvas.height = badgeHScaled + nameHScaled + 15 // 여백 15px
+
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = '#050505'
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  return canvas.toDataURL('image/png')
+  // 상단 배지 그리기
+  ctx.drawImage(image, boxX, badgeSy, boxW, badgeSh, 0, 0, targetW, badgeHScaled)
+  // 하단 이름표 그리기
+  ctx.drawImage(image, boxX, nameSy, boxW, nameSh, 0, badgeHScaled + 15, targetW, nameHScaled)
+
+  // 디버그 인스펙터용 이름표 단독 이미지
+  const nameCanvas = document.createElement('canvas')
+  const nameCtx = nameCanvas.getContext('2d')
+  nameCanvas.width = targetW
+  nameCanvas.height = nameHScaled
+  if (nameCtx) {
+    nameCtx.imageSmoothingEnabled = true
+    nameCtx.imageSmoothingQuality = 'high'
+    nameCtx.fillStyle = '#050505'
+    nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
+    nameCtx.drawImage(image, boxX, nameSy, boxW, nameSh, 0, 0, targetW, nameHScaled)
+  }
+
+  return {
+    dualUrl: canvas.toDataURL('image/png'),
+    nameUrl: nameCanvas ? nameCanvas.toDataURL('image/png') : null
+  }
 }
 
-// 🌟 [배지+이름 2줄 전용 판독 엔진]
+// 🌟 [완전 일치 + 투수 배제 엔진]
 const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
   const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
 
   // 1단계: 타자 DB 한정 (투수 카드 'SP', 'RP', 'CP' 배제)
   const batterList = players.value.filter(p => !['SP', 'RP', 'CP'].includes(String(p.position).toUpperCase()))
 
-  // 2단계: 선수 이름 100% 매칭
+  // 2단계: 선수 이름 100% 완전 일치
   let matchedName = ''
   for (const p of batterList) {
     const pName = String(p.name || '').trim()
@@ -2040,20 +2068,13 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
     }
   }
 
-  // 2-1. 모음 1개 뭉개짐 대비 (예: '이증범' -> '이종범', '김종묘' -> '김종모')
+  // 2-1. 오독 대비 보조 매칭 (예: '이증범' 등)
   if (!matchedName) {
     for (const p of batterList) {
       const pName = String(p.name || '').trim()
-      if (pName.length === 3) {
-        // 첫 글자와 마지막 글자가 일치하고, 중간 글자 자음이 같거나 유사할 때
-        if (cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
-          const i0 = cleanText.indexOf(pName[0])
-          const i2 = cleanText.indexOf(pName[2])
-          if (i2 === i0 + 2) {
-            matchedName = pName
-            break
-          }
-        }
+      if (pName.length === 3 && cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
+        matchedName = pName
+        break
       }
     }
   }
@@ -2144,15 +2165,15 @@ const handleOcrUpload = async (event: Event) => {
       const slot = OCR_SLOTS[i]
       ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 분석 중...`
 
-      const cardUrl = cropCardImage(img, slot)
-      if (!cardUrl) continue
+      const { dualUrl, nameUrl } = cropDualCardImages(img, slot)
+      if (!dualUrl) continue
 
-      const { data: { text } } = await worker.recognize(cardUrl)
+      const { data: { text } } = await worker.recognize(dualUrl)
       const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
 
       ocrDebugList.value.push({
         slot: slot.pos,
-        imgUrl: cardUrl,
+        imgUrl: nameUrl || dualUrl, // 디버그에는 깔끔한 이름표 영역 표시
         rawText: text.trim().replace(/\n+/g, ' '),
         matchedName: foundName,
         matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
