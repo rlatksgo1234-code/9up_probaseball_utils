@@ -2206,6 +2206,11 @@ const handleOcrUpload = async (event: Event) => {
       const { dualUrl } = cropDualCardImages(img, slot)
       if (!dualUrl) continue
 
+      // 🌟 [추가 위치] worker.recognize 바로 윗줄에 이 코드를 넣어주세요!
+      await worker.setParameters({
+        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
+      })
+      
       const { data: { text } } = await worker.recognize(dualUrl)
       const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
 
