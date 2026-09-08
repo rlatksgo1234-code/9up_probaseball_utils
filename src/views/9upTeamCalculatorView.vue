@@ -1971,54 +1971,31 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [좌표 여유 확장] 가로세로 폭을 넉넉하게 넓혀 글자 잘림 원천 차단
+// 🌟 [수정] 카드 하단 이름 바까지 넉넉하게 포함하도록 높이(h)를 0.34로 확장
 const OCR_SLOTS = [
-  { pos: 'LF',  x: 0.21, y: 0.10, w: 0.13, h: 0.30 },
-  { pos: 'CF',  x: 0.41, y: 0.10, w: 0.13, h: 0.30 },
-  { pos: 'RF',  x: 0.61, y: 0.10, w: 0.13, h: 0.30 },
-  { pos: 'SS',  x: 0.31, y: 0.25, w: 0.13, h: 0.30 },
-  { pos: '2B',  x: 0.51, y: 0.25, w: 0.13, h: 0.30 },
-  { pos: '3B',  x: 0.21, y: 0.38, w: 0.13, h: 0.30 },
-  { pos: 'SP1', x: 0.41, y: 0.38, w: 0.13, h: 0.30 },
-  { pos: '1B',  x: 0.61, y: 0.38, w: 0.13, h: 0.30 },
-  { pos: 'C',   x: 0.41, y: 0.66, w: 0.13, h: 0.30 },
-  { pos: 'DH',  x: 0.52, y: 0.66, w: 0.13, h: 0.30 }
+  { pos: 'LF',  x: 0.21, y: 0.10, w: 0.13, h: 0.34 },
+  { pos: 'CF',  x: 0.41, y: 0.10, w: 0.13, h: 0.34 },
+  { pos: 'RF',  x: 0.61, y: 0.10, w: 0.13, h: 0.34 },
+  { pos: 'SS',  x: 0.31, y: 0.25, w: 0.13, h: 0.34 },
+  { pos: '2B',  x: 0.51, y: 0.25, w: 0.13, h: 0.34 },
+  { pos: '3B',  x: 0.21, y: 0.38, w: 0.13, h: 0.34 },
+  { pos: 'SP1', x: 0.41, y: 0.38, w: 0.13, h: 0.34 },
+  { pos: '1B',  x: 0.61, y: 0.38, w: 0.13, h: 0.34 },
+  { pos: 'C',   x: 0.41, y: 0.67, w: 0.13, h: 0.32 },
+  { pos: 'DH',  x: 0.52, y: 0.67, w: 0.13, h: 0.32 }
 ]
 
-const triggerOcrInput = () => {
-  ocrFileInput.value?.click()
-}
-
-// 캔버스 크롭 도우미 (2배 확대 무손실)
-const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return null
-
-  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
-  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
-  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
-  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
-
-  canvas.width = sw * 2
-  canvas.height = sh * 2
-  ctx.imageSmoothingEnabled = true
-  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-
-  return canvas.toDataURL('image/png')
-}
-
-// 🌟 [유사도 매칭 탑재] 1글자 오타나 2글자만 읽혀도 완벽 복구
+// 🌟 [수정] 김종모, 양준혁 전용 보정 및 2글자 매칭 강화
 const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1단계: 3글자 풀네임 완벽 일치 검색
+  // 1. 3글자 풀네임 매칭
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 2단계: 풀네임 실패 시 앞 2글자 또는 뒤 2글자 부분 매칭 (김도*, 이종*, *종모 등)
+  // 2. 풀네임 미검출 시 앞/뒤 2글자 매칭 (종모, 양준 등)
   if (candidates.length === 0) {
     const matchedBySub = players.value.filter(p => {
       const pName = String(p.name || '').replace(/\s+/g, '')
@@ -2028,7 +2005,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
       return cleanText.includes(prefix) || cleanText.includes(suffix)
     })
     
-    // 포지션이 일치하는 후보 우선 선택
+    // 해당 포지션 적합 카드 우선
     const posMatched = matchedBySub.filter(p => isValidSlotForPlayer(p, targetPos))
     candidates = posMatched.length > 0 ? posMatched : matchedBySub
   }
@@ -2036,7 +2013,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   if (candidates.length === 0) return null
   if (candidates.length === 1) return candidates[0]
 
-  // 3단계: 등급 뱃지 필터링 (HIT, TOP, DGN 등)
+  // 3. 등급 뱃지 필터링
   const upper = rawText.toUpperCase()
   let detectedGrade = ''
   if (upper.includes('HIT') || upper.includes('히트')) detectedGrade = 'HIT'
@@ -2053,21 +2030,27 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   }
   if (candidates.length === 1) return candidates[0]
 
-  // 4단계: 연도 인식 및 83 <-> 88 교정
+  // 4. 연도 인식 및 숫자 83 <-> 88 / 82 교정
   const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
   if (yearMatches && yearMatches.length > 0) {
     const detectedYear = yearMatches[yearMatches.length - 1]
+    
+    // 정확 일치
     const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (exact.length > 0) return exact[0]
 
-    const altYear = detectedYear.endsWith('8') ? detectedYear.slice(0, 1) + '3' : detectedYear.endsWith('3') ? detectedYear.slice(0, 1) + '8' : ''
-    if (altYear) {
-      const altMatch = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(altYear)))
+    // 83이 88이나 82로 오독된 경우
+    const altYears: string[] = []
+    if (detectedYear === '88' || detectedYear === '82') altYears.push('83')
+    if (detectedYear === '83') altYears.push('88', '82')
+
+    for (const ay of altYears) {
+      const altMatch = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(ay)))
       if (altMatch.length > 0) return altMatch[0]
     }
   }
 
-  // 5단계: 슬롯 포지션 적합성 최종 검증
+  // 5. 포지션 최종 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
