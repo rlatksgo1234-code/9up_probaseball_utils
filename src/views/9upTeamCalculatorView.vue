@@ -2005,12 +2005,12 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [배지(좌측 중간) + 이름표(하단) 핀포인트 듀얼 머지 크롭]
+// 📸 [배지 + 이름표 완벽 듀얼 머지 크롭 & 디버그 통합 렌더링]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
-  if (!ctx) return { dualUrl: null, nameUrl: null }
+  if (!ctx) return { dualUrl: null }
 
   const imgW = image.naturalWidth
   const imgH = image.naturalHeight
@@ -2020,17 +2020,17 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 등급 배지 영역 (카드 좌측 중간: x는 10%~48%, y는 35%~52%)
-  const badgeX = cardX + (cardW * 0.10)
-  const badgeY = cardY + (cardH * 0.35)
-  const badgeW = cardW * 0.38
-  const badgeH = cardH * 0.17
+  // 🌟 1. 등급 배지 영역 (카드 좌측 중간: x는 12%~55%, y는 33%~52%)
+  const badgeX = cardX + (cardW * 0.12)
+  const badgeY = cardY + (cardH * 0.33)
+  const badgeW = cardW * 0.43
+  const badgeH = cardH * 0.19
 
-  // 🌟 2. 하단 이름표 영역 (카드 하단 중앙: x는 10%~90%, y는 76%~96%)
+  // 🌟 2. 하단 이름표 영역 (카드 하단 중앙: x는 10%~90%, y는 74%~98%)
   const nameX = cardX + (cardW * 0.10)
-  const nameY = cardY + (cardH * 0.76)
+  const nameY = cardY + (cardH * 0.74)
   const nameW = cardW * 0.80
-  const nameH = cardH * 0.20
+  const nameH = cardH * 0.24
 
   const scale = 3
   const badgeW_scaled = Math.round(badgeW * scale)
@@ -2039,39 +2039,26 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const nameH_scaled = Math.round(nameH * scale)
   const destW = Math.max(badgeW_scaled, nameW_scaled)
 
+  // 통합 캔버스 (위: 배지 / 아래: 이름표)
   canvas.width = destW
-  canvas.height = badgeH_scaled + nameH_scaled + 20 // 위아래 간격 20px
+  canvas.height = badgeH_scaled + nameH_scaled + 15 // 사이 여백 15px
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#111111'
+  ctx.fillStyle = '#0f172a' // 깔끔한 다크 배경
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단/중앙에 위치한 등급 배지 붙이기
-  ctx.drawImage(image, badgeX, badgeY, badgeW, badgeH, 0, 0, badgeW_scaled, badgeH_scaled)
+  // 상단에 등급 배지 그리기
+  ctx.drawImage(image, badgeX, badgeY, badgeW, badgeH, Math.round((destW - badgeW_scaled) / 2), 0, badgeW_scaled, badgeH_scaled)
   
-  // 하단 이름표 붙이기 (배지 바로 아래에 이어붙이기)
-  ctx.drawImage(image, nameX, nameY, nameW, nameH, 0, badgeH_scaled + 20, nameW_scaled, nameH_scaled)
-
-  // 디버그 인스펙터용 '이름표 단독 썸네일'
-  const nameCanvas = document.createElement('canvas')
-  const nameCtx = nameCanvas.getContext('2d')
-  nameCanvas.width = nameW_scaled
-  nameCanvas.height = nameH_scaled
-  if (nameCtx) {
-    nameCtx.imageSmoothingEnabled = true
-    nameCtx.imageSmoothingQuality = 'high'
-    nameCtx.fillStyle = '#111111'
-    nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
-    nameCtx.drawImage(image, nameX, nameY, nameW, nameH, 0, 0, nameW_scaled, nameH_scaled)
-  }
+  // 하단에 이름표 그리기 (배지 바로 아래에 이어붙이기)
+  ctx.drawImage(image, nameX, nameY, nameW, nameH, Math.round((destW - nameW_scaled) / 2), badgeH_scaled + 15, nameW_scaled, nameH_scaled)
 
   return {
-    dualUrl: canvas.toDataURL('image/png'),
-    nameUrl: nameCanvas ? nameCanvas.toDataURL('image/png') : null
+    dualUrl: canvas.toDataURL('image/png')
   }
 }
-
+  
 // 🌟 [완전 일치 + 투수 배제 엔진]
 const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
   const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
@@ -2186,7 +2173,7 @@ const handleOcrUpload = async (event: Event) => {
       const slot = OCR_SLOTS[i]
       ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 분석 중...`
 
-      const { dualUrl, nameUrl } = cropDualCardImages(img, slot)
+      const { dualUrl } = cropDualCardImages(img, slot)
       if (!dualUrl) continue
 
       const { data: { text } } = await worker.recognize(dualUrl)
@@ -2194,7 +2181,7 @@ const handleOcrUpload = async (event: Event) => {
 
       ocrDebugList.value.push({
         slot: slot.pos,
-        imgUrl: nameUrl || dualUrl, // 디버그에는 깔끔한 이름표 영역 표시
+        imgUrl: dualUrl, // 👈 이제 썸네일에 배지와 이름이 합쳐진 통합본이 선명하게 나옵니다!
         rawText: text.trim().replace(/\n+/g, ' '),
         matchedName: foundName,
         matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
