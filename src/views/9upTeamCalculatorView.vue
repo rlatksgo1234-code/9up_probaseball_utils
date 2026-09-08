@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [정밀 X/Y 좌표 조율 & 원본 화질 통합 크롭 엔진]
+// 📸 [황금 대칭 좌표계 복원 & 단일 통합 크롭 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,13 +2020,12 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 상단 배지 영역: X축을 우측으로 살짝 이동(0.18), Y축을 내려서(0.40) 윗 여백 컷
-  const badgeX = cardX + (cardW * 0.18)
+  // 🌟 정밀 좌우 좌표 및 Y축 세팅 (왼쪽 잘림 방지 및 오른쪽 불필요 여백 컷팅)
+  const badgeX = cardX + (cardW * 0.14)
   const badgeY = cardY + (cardH * 0.40)
-  const badgeW = cardW * 0.40
+  const badgeW = cardW * 0.32
   const badgeH = cardH * 0.16
 
-  // 🌟 2. 하단 이름표 영역: Y축을 살짝 올려서(0.73) 위쪽 여유 확보 및 하단 컷
   const nameX = cardX + (cardW * 0.12)
   const nameY = cardY + (cardH * 0.73)
   const nameW = cardW * 0.65
@@ -2046,10 +2045,9 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#000000' // 완전한 검은색 배경
+  ctx.fillStyle = '#000000'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단에 등급 배지 그리기 (전처리 없이 고해상도 원본 유지)
   ctx.drawImage(
     image, badgeX, badgeY, badgeW, badgeH, 
     padding + Math.round((destW - badgeW_scaled - (padding * 2)) / 2), 
@@ -2057,7 +2055,6 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     badgeW_scaled, badgeH_scaled
   )
   
-  // 하단에 이름표 그리기 (전처리 없이 고해상도 원본 유지)
   ctx.drawImage(
     image, nameX, nameY, nameW, nameH, 
     padding + Math.round((destW - nameW_scaled - (padding * 2)) / 2), 
@@ -2071,7 +2068,92 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
 }
 
 // ========================================================
-// 📸 [스크린샷 일괄 등록 및 단일 통합 화이트리스트 OCR 실행]
+// 📸 [카드 매칭 및 인식 엔진 (processCardSlot)]
+// ========================================================
+const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
+  const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
+
+  const batterList = players.value.filter(p => !['SP', 'RP', 'CP'].includes(String(p.position).toUpperCase()))
+
+  let matchedName = ''
+  for (const p of batterList) {
+    const pName = String(p.name || '').trim()
+    if (pName.length >= 2 && cleanText.includes(pName)) {
+      matchedName = pName
+      break
+    }
+  }
+
+  if (!matchedName) {
+    for (const p of batterList) {
+      const pName = String(p.name || '').trim()
+      if (pName.length === 3 && cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
+        matchedName = pName
+        break
+      }
+    }
+  }
+
+  if (!matchedName) return { player: null, name: null }
+
+  const candidates = batterList.filter(p => String(p.name || '').trim() === matchedName)
+  if (candidates.length <= 1) return { player: candidates[0] || null, name: matchedName }
+
+  const upperRaw = rawText.toUpperCase()
+  const detectedYears: string[] = []
+  const quoted = rawText.match(/['’](\d{2})/)
+  if (quoted) detectedYears.push(quoted[1])
+  const yearMatches = Array.from(rawText.matchAll(/\b([89012]\d)\b/g))
+  for (const m of yearMatches) {
+    if (!detectedYears.includes(m[1])) detectedYears.push(m[1])
+  }
+
+  let detectedGrade = ''
+  if (/(?:HIT|H1T|H!T|H\|T|HT|HI7|히트)/i.test(upperRaw)) {
+    detectedGrade = 'HIT'
+  } else if (/(?:TOP|T0P|TDP|TOR|10P|탑)/i.test(upperRaw)) {
+    detectedGrade = 'TOP'
+  } else if (/(?:DGN|디그|D6N|IGN|OGN)/i.test(upperRaw)) {
+    detectedGrade = 'DGN'
+  } else if (/(?:GOLDEN|GLOVE|GG|골글)/i.test(upperRaw)) {
+    detectedGrade = 'GG'
+  }
+
+  let bestCard = candidates[0]
+  let maxScore = -999
+
+  for (const card of candidates) {
+    let score = 0
+    const cardGrade = getMappedGrade(card.grade)
+    const cardYears = getArray(card.year).map(y => String(y).replace(/\D/g, '').slice(-2))
+
+    if (detectedGrade) {
+      if (cardGrade === detectedGrade) score += 40
+      else score -= 20
+    } else {
+      if (cardGrade === 'HIT' || cardGrade === 'TOP') score += 10
+      else if (cardGrade === 'DGN') score -= 10
+    }
+
+    if (detectedYears.length > 0 && cardYears.some(y => detectedYears.includes(y))) {
+      score += 50
+    }
+
+    if (isValidSlotForPlayer(card, targetPos)) {
+      score += 5
+    }
+
+    if (score > maxScore) {
+      maxScore = score
+      bestCard = card
+    }
+  }
+
+  return { player: bestCard, name: matchedName }
+}
+
+// ========================================================
+// 📸 [스크린샷 일괄 등록 및 안정적인 OCR 실행]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -2096,11 +2178,6 @@ const handleOcrUpload = async (event: Event) => {
 
       const { dualUrl } = cropDualCardImages(img, slot)
       if (!dualUrl) continue
-
-      // 🌟 단일 통합 화이트리스트 적용 (영문, 숫자, 한글, 공백 허용 - 워커 꼬임 방지)
-      await worker.setParameters({
-        tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
-      })
 
       const { data: { text } } = await worker.recognize(dualUrl)
       const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
