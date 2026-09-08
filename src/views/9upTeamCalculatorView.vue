@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [콤팩트 배지-이름 크롭 & 후보군 매칭] 타자 9인 OCR 엔진
+// 📸 [여유 박스 크롭 & 후보군 매칭] 타자 9인 정밀 OCR 엔진
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1969,31 +1969,31 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [배지 ~ 이름표 집중 캡처 좌표계] 상단 얼굴·레벨 100을 제외한 하단 60% 콤팩트 박스
+// 🌟 [배지+이름표 여유 수납 좌표계] 상단 일러스트 제외, 이름표/배지 잘림 원천 차단 (h: 0.28)
 const OCR_SLOTS = [
-  // 1열 (외야): LF 좌측 여백 확보, 상단 얼굴 제외
-  { pos: 'LF', x: 0.185, y: 0.18, w: 0.15, h: 0.21 },
-  { pos: 'CF', x: 0.385, y: 0.18, w: 0.15, h: 0.21 },
-  { pos: 'RF', x: 0.585, y: 0.18, w: 0.15, h: 0.21 },
+  // 1열 (외야): y 시작점을 살짝 올리고 h를 0.28로 확장해 김종모·김일권·양준혁 이름표 확보
+  { pos: 'LF', x: 0.18, y: 0.14, w: 0.16, h: 0.28 },
+  { pos: 'CF', x: 0.39, y: 0.14, w: 0.16, h: 0.28 },
+  { pos: 'RF', x: 0.60, y: 0.14, w: 0.16, h: 0.28 },
 
-  // 2열 (키스톤): 유격 - 2루
-  { pos: 'SS', x: 0.285, y: 0.33, w: 0.15, h: 0.21 },
-  { pos: '2B', x: 0.485, y: 0.33, w: 0.15, h: 0.21 },
+  // 2열 (키스톤): 이종범 이름표 하단 잘림 방지
+  { pos: 'SS', x: 0.285, y: 0.29, w: 0.16, h: 0.28 },
+  { pos: '2B', x: 0.495, y: 0.29, w: 0.16, h: 0.28 },
 
-  // 3열 (코너): 3루 - 1루 (중앙 선발투수는 X축 범위 밖)
-  { pos: '3B', x: 0.185, y: 0.47, w: 0.15, h: 0.21 },
-  { pos: '1B', x: 0.585, y: 0.47, w: 0.15, h: 0.21 },
+  // 3열 (코너): 김도영·김성한 성공 영역 유지하며 여백 확보 (중앙 투수 스킵)
+  { pos: '3B', x: 0.18, y: 0.43, w: 0.16, h: 0.28 },
+  { pos: '1B', x: 0.60, y: 0.43, w: 0.16, h: 0.28 },
 
-  // 4열 (하단): 포수 - 지명타자 (좌측 감독은 X축 범위 밖)
-  { pos: 'C',  x: 0.385, y: 0.75, w: 0.15, h: 0.21 },
-  { pos: 'DH', x: 0.505, y: 0.75, w: 0.15, h: 0.21 }
+  // 4열 (하단): y 시작점을 0.69로 올려 김봉연 HIT 83 배지 수납 (좌측 감독 스킵)
+  { pos: 'C',  x: 0.39, y: 0.69, w: 0.16, h: 0.28 },
+  { pos: 'DH', x: 0.51, y: 0.69, w: 0.16, h: 0.28 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 왜곡 없는 2.5배 고해상도 무손실 크롭
+// 🌟 왜곡 없는 2배 고해상도 무손실 크롭
 const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2004,8 +2004,8 @@ const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
   const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
 
-  canvas.width = Math.round(sw * 2.5)
-  canvas.height = Math.round(sh * 2.5)
+  canvas.width = sw * 2
+  canvas.height = sh * 2
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
@@ -2013,11 +2013,11 @@ const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   return canvas.toDataURL('image/png')
 }
 
-// 🌟 [이름 선점 -> 후보군 압축 -> 배지/연도 타격 매칭]
+// 🌟 [3단계 정밀 매칭] 1. 이름 선점 -> 2. 후보군 압축 -> 3. 배지/시즌 핀포인트 대조
 const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
 
-  // 1단계: 하단 텍스트에서 선수 이름 식별
+  // 1단계: 선수 이름 식별 (완전 일치 -> 2글자 부분 일치)
   let matchedName = ''
   for (const p of players.value) {
     const pName = String(p.name || '').trim()
@@ -2027,7 +2027,6 @@ const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
     }
   }
 
-  // 1-1. 2글자 부분 일치 보조 (폰트 오독 방어)
   if (!matchedName) {
     for (const p of players.value) {
       const pName = String(p.name || '').trim()
@@ -2038,9 +2037,10 @@ const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
     }
   }
 
+  // 이름을 찾지 못했으면 누락 방지를 위해 중단
   if (!matchedName) return null
 
-  // 2단계: 해당 선수의 DB 카드 목록 추출
+  // 2단계: 해당 선수의 DB 카드 목록으로 후보군 대폭 압축 (2~4장 내외)
   const candidates = players.value.filter(p => String(p.name || '').trim() === matchedName)
   if (candidates.length <= 1) return candidates[0] || null
 
@@ -2049,7 +2049,7 @@ const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
   let detectedGrade = ''
   let detectedYear = ''
 
-  // HIT 및 직후 연도 추출 (예: HIT 83, H1T 99 등)
+  // HIT 및 직후 연도 추출 (HIT 83, H1T 99, HIT 24 등)
   const hitMatch = upperRaw.match(/(?:HIT|H1T|H!T|H\|T|HT|HI7|히트)\D*([89012]\d)/)
   if (hitMatch) {
     detectedGrade = 'HIT'
@@ -2067,13 +2067,13 @@ const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
     else if (/(?:ACE|에이스)/.test(upperRaw)) detectedGrade = 'ACE'
   }
 
-  // 연도가 아직 없으면 2자리 연도 탐색
+  // 연도가 아직 잡히지 않은 경우 2자리 연도 탐색
   if (!detectedYear) {
     const yr = upperRaw.match(/\b([89012]\d)\b/)
     if (yr) detectedYear = yr[1]
   }
 
-  // 4단계: 후보군 채점
+  // 4단계: 후보 카드별 정밀 채점
   let bestCard = candidates[0]
   let maxScore = -1
 
@@ -2082,13 +2082,13 @@ const processCardSlot = (rawText: string, targetPos: string): Raw | null => {
     const cardGrade = getMappedGrade(card.grade)
     const cardYears = getArray(card.year).map(y => String(y).replace(/\D/g, '').slice(-2))
 
-    // 등급 일치 (+20)
+    // 등급 일치 (+20점)
     if (detectedGrade && cardGrade === detectedGrade) score += 20
 
-    // 연도 일치 (+20)
+    // 연도 일치 (+20점)
     if (detectedYear && cardYears.includes(detectedYear)) score += 20
 
-    // 현재 슬롯 적합 여부 (+5)
+    // 해당 슬롯 장착 가능 여부 (+5점)
     if (isValidSlotForPlayer(card, targetPos)) score += 5
 
     if (score > maxScore) {
