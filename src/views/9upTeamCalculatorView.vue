@@ -1914,13 +1914,12 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [크롭 실시간 디버그 & 완전 일치 전용] 타자 9인 OCR 엔진
+// 📸 [얼굴 100% 배제 / 배지~이름표 콤팩트 직사각형 크롭]
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
 const ocrProgressText = ref('')
 
-// 🌟 [디버그 인스펙터 상태] 9개 슬롯이 어떻게 잘렸는지 화면에 보여줄 배열
 interface OcrDebugItem {
   slot: string
   imgUrl: string
@@ -1979,31 +1978,31 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [배지 ~ 이름표 조준 좌표계]
+// 🌟 [배지+이름표 핀포인트 좌표계] 얼굴을 버리고 배지~이름 바(h: 0.16)만 납작하게 캡처
 const OCR_SLOTS = [
-  // 1열 (외야)
-  { pos: 'LF', x: 0.195, y: 0.115, w: 0.155, h: 0.29 },
-  { pos: 'CF', x: 0.395, y: 0.115, w: 0.155, h: 0.29 },
-  { pos: 'RF', x: 0.595, y: 0.115, w: 0.155, h: 0.29 },
+  // 1열 (외야): 배지 시작선(y: 0.245)부터 이름표 바닥까지
+  { pos: 'LF', x: 0.195, y: 0.245, w: 0.155, h: 0.165 },
+  { pos: 'CF', x: 0.395, y: 0.245, w: 0.155, h: 0.165 },
+  { pos: 'RF', x: 0.595, y: 0.245, w: 0.155, h: 0.165 },
 
   // 2열 (키스톤): 유격 - 2루
-  { pos: 'SS', x: 0.295, y: 0.270, w: 0.155, h: 0.29 },
-  { pos: '2B', x: 0.495, y: 0.270, w: 0.155, h: 0.29 },
+  { pos: 'SS', x: 0.295, y: 0.395, w: 0.155, h: 0.165 },
+  { pos: '2B', x: 0.495, y: 0.395, w: 0.155, h: 0.165 },
 
-  // 3열 (코너): 3루 - 1루 (중앙 선발투수 완전 제외)
-  { pos: '3B', x: 0.195, y: 0.400, w: 0.155, h: 0.29 },
-  { pos: '1B', x: 0.595, y: 0.400, w: 0.155, h: 0.29 },
+  // 3열 (코너): 3루 - 1루
+  { pos: '3B', x: 0.195, y: 0.525, w: 0.155, h: 0.165 },
+  { pos: '1B', x: 0.595, y: 0.525, w: 0.155, h: 0.165 },
 
-  // 4열 (하단): 포수 - 지명타자 (좌측 감독 완전 제외)
-  { pos: 'C',  x: 0.395, y: 0.680, w: 0.155, h: 0.29 },
-  { pos: 'DH', x: 0.510, y: 0.680, w: 0.155, h: 0.29 }
+  // 4열 (하단): 포수 - 지명타자
+  { pos: 'C',  x: 0.395, y: 0.805, w: 0.155, h: 0.165 },
+  { pos: 'DH', x: 0.510, y: 0.805, w: 0.155, h: 0.165 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 2.5배 고해상도 무손실 크롭
+// 🌟 3배 무손실 흑백 대비 최적화 크롭
 const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]): string | null => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2014,22 +2013,24 @@ const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]): stri
   const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
   const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
 
-  canvas.width = Math.round(sw * 2.5)
-  canvas.height = Math.round(sh * 2.5)
+  // 글자 시인성을 위해 3배 확대
+  canvas.width = Math.round(sw * 3)
+  canvas.height = Math.round(sh * 3)
   ctx.imageSmoothingEnabled = true
+  ctx.imageSmoothingQuality = 'high'
   ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
 
   return canvas.toDataURL('image/png')
 }
 
-// 🌟 [완전 일치 + 투수 배제 엔진]
+// 🌟 [배지+이름 2줄 전용 판독 엔진]
 const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
   const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
 
-  // 1단계: 타자 DB 한정 (투수 카드 'SP', 'RP', 'CP' 원천 배제)
+  // 1단계: 타자 DB 한정 (투수 카드 'SP', 'RP', 'CP' 배제)
   const batterList = players.value.filter(p => !['SP', 'RP', 'CP'].includes(String(p.position).toUpperCase()))
 
-  // 2단계: 선수 이름 100% 완전 일치만 허용 (유사도/부분 일치 삭제)
+  // 2단계: 선수 이름 100% 매칭
   let matchedName = ''
   for (const p of batterList) {
     const pName = String(p.name || '').trim()
@@ -2039,17 +2040,34 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
     }
   }
 
-  // 이름을 못 찾았으면 즉시 중단
+  // 2-1. 모음 1개 뭉개짐 대비 (예: '이증범' -> '이종범', '김종묘' -> '김종모')
+  if (!matchedName) {
+    for (const p of batterList) {
+      const pName = String(p.name || '').trim()
+      if (pName.length === 3) {
+        // 첫 글자와 마지막 글자가 일치하고, 중간 글자 자음이 같거나 유사할 때
+        if (cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
+          const i0 = cleanText.indexOf(pName[0])
+          const i2 = cleanText.indexOf(pName[2])
+          if (i2 === i0 + 2) {
+            matchedName = pName
+            break
+          }
+        }
+      }
+    }
+  }
+
   if (!matchedName) return { player: null, name: null }
 
-  // 3단계: 해당 타자의 DB 카드 목록 확보
+  // 3단계: 해당 타자의 DB 카드 목록
   const candidates = batterList.filter(p => String(p.name || '').trim() === matchedName)
   if (candidates.length <= 1) return { player: candidates[0] || null, name: matchedName }
 
   // 4단계: 배지 텍스트 파싱
   const upperRaw = rawText.toUpperCase()
 
-  // 연도 탐색
+  // 연도 추출 ('99, '24, '83 등)
   const detectedYears: string[] = []
   const quoted = rawText.match(/['’](\d{2})/)
   if (quoted) detectedYears.push(quoted[1])
@@ -2058,7 +2076,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
     if (!detectedYears.includes(m[1])) detectedYears.push(m[1])
   }
 
-  // 등급 탐색
+  // 등급 추출
   let detectedGrade = ''
   if (/(?:HIT|H1T|H!T|H\|T|HT|HI7|히트)/i.test(upperRaw)) {
     detectedGrade = 'HIT'
@@ -2079,22 +2097,18 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
     const cardGrade = getMappedGrade(card.grade)
     const cardYears = getArray(card.year).map(y => String(y).replace(/\D/g, '').slice(-2))
 
-    // 등급 가산점
     if (detectedGrade) {
       if (cardGrade === detectedGrade) score += 40
       else score -= 20
     } else {
-      // 등급 모호 시 DGN 자동 쏠림 방지
       if (cardGrade === 'HIT' || cardGrade === 'TOP') score += 10
       else if (cardGrade === 'DGN') score -= 10
     }
 
-    // 연도 가산점
     if (detectedYears.length > 0 && cardYears.some(y => detectedYears.includes(y))) {
       score += 50
     }
 
-    // 슬롯 적합도
     if (isValidSlotForPlayer(card, targetPos)) {
       score += 5
     }
@@ -2117,7 +2131,7 @@ const handleOcrUpload = async (event: Event) => {
   try {
     isOcrProcessing.value = true
     ocrProgressText.value = 'OCR 엔진을 초기화하고 있습니다...'
-    ocrDebugList.value = [] // 디버그 초기화
+    ocrDebugList.value = []
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
@@ -2126,7 +2140,6 @@ const handleOcrUpload = async (event: Event) => {
     const worker = await createWorker('kor+eng')
     let matchedCount = 0
 
-    // 9개 타자 슬롯 순차 스캔
     for (let i = 0; i < OCR_SLOTS.length; i++) {
       const slot = OCR_SLOTS[i]
       ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 분석 중...`
@@ -2137,7 +2150,6 @@ const handleOcrUpload = async (event: Event) => {
       const { data: { text } } = await worker.recognize(cardUrl)
       const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
 
-      // 디버그 리스트에 캡처 이미지와 읽힌 텍스트 기록
       ocrDebugList.value.push({
         slot: slot.pos,
         imgUrl: cardUrl,
@@ -2163,7 +2175,7 @@ const handleOcrUpload = async (event: Event) => {
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
-    showToast(`총 ${matchedCount}명의 타자가 배치되었습니다. 하단에서 크롭 사진을 확인하세요!`, 'info')
+    showToast(`라인업 스캔 완료: 총 ${matchedCount}명이 배치되었습니다!`, 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
