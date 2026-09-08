@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 듀얼 크롭(뱃지+이름) & 2단계 스마트 포지션 배정 OCR 엔진
+// 📸 듀얼 크롭(뱃지+이름) & 2단계 스마트 포지션 배정 OCR 엔진 (오타 수정 완료)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1986,28 +1986,32 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [듀얼 크롭] 뱃지 영역과 이름 영역을 각각 독립적으로 고해상도 캡처
+// 🌟 [오타 수정 완료] 뱃지 영역과 이름 영역을 각각 독립적으로 고해상도 캡처
 const cropDualRegions = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
   const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
   const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
   const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
 
-  // 1. 상단 좌측 뱃지/연도 영역 크롭 (예: HIT 83, TOP 등)
+  // 1. 상단 좌측 뱃지/연도 영역 크롭
   const badgeCanvas = document.createElement('canvas')
   const badgeCtx = badgeCanvas.getContext('2d')
   badgeCanvas.width = (sw * 0.5) * 2
   badgeCanvas.height = (sh * 0.3) * 2
-  badgeCtx?.imageSmoothingEnabled(true)
-  badgeCtx?.drawImage(image, sx, sy, sw * 0.5, sh * 0.3, 0, 0, badgeCanvas.width, badgeCanvas.height)
+  if (badgeCtx) {
+    badgeCtx.imageSmoothingEnabled = true
+    badgeCtx.drawImage(image, sx, sy, sw * 0.5, sh * 0.3, 0, 0, badgeCanvas.width, badgeCanvas.height)
+  }
 
-  // 2. 하단 이름 바 영역 크롭 (예: 김종모 '83)
+  // 2. 하단 이름 바 영역 크롭
   const nameCanvas = document.createElement('canvas')
   const nameCtx = nameCanvas.getContext('2d')
   nameCanvas.width = sw * 2
   nameCanvas.height = (sh * 0.35) * 2
-  nameCtx?.imageSmoothingEnabled(true)
-  nameCtx?.drawImage(image, sx, sy + sh * 0.65, sw, sh * 0.35, 0, 0, nameCanvas.width, nameCanvas.height)
+  if (nameCtx) {
+    nameCtx.imageSmoothingEnabled = true
+    nameCtx.drawImage(image, sx, sy + sh * 0.65, sw, sh * 0.35, 0, 0, nameCanvas.width, nameCanvas.height)
+  }
 
   return {
     badgeUrl: badgeCanvas.toDataURL('image/png'),
@@ -2015,12 +2019,11 @@ const cropDualRegions = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => 
   }
 }
 
-// 🌟 [정밀 매칭] 읽어낸 이름, 등급, 연도를 조합하여 정확한 선수 1장을 색출
+// 정밀 매칭 함수
 const findDetailedPlayer = (nameText: string, badgeText: string, targetPos: string): Raw | null => {
   const cleanName = nameText.replace(/\s+/g, '')
   const upperBadge = badgeText.toUpperCase()
 
-  // 1. 등급 판별 (HIT, TOP, DGN, GG 등)
   let detectedGrade = ''
   if (upperBadge.includes('HIT') || upperBadge.includes('히트')) detectedGrade = 'HIT'
   else if (upperBadge.includes('TOP') || upperBadge.includes('탑')) detectedGrade = 'TOP'
@@ -2029,11 +2032,9 @@ const findDetailedPlayer = (nameText: string, badgeText: string, targetPos: stri
   else if (upperBadge.includes('GG')) detectedGrade = 'GG'
   else if (upperBadge.includes('MMVP') || upperBadge.includes('MVP')) detectedGrade = 'MMVP'
 
-  // 2. 연도 판별 (83, 99 등)
   const yearMatch = badgeText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/)
   const detectedYear = yearMatch ? yearMatch[1] : ''
 
-  // 3. 이름 후보군 필터링
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanName.includes(pName)
@@ -2048,26 +2049,23 @@ const findDetailedPlayer = (nameText: string, badgeText: string, targetPos: stri
 
   if (candidates.length === 0) return null
 
-  // 4. 등급이 감지되었다면 등급 일치 우선 필터링
   if (detectedGrade) {
     const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
     if (gradeFiltered.length > 0) candidates = gradeFiltered
   }
 
-  // 5. 연도가 감지되었다면 연도 일치 우선 필터링
   if (detectedYear) {
     const yearFiltered = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (yearFiltered.length > 0) candidates = yearFiltered
   }
 
-  // 6. 포지션 호환성 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
   return candidates[0]
 }
 
-// 🌟 [2단계 스마트 배정 엔진 적용] 스크린샷 일괄 등록 실행
+// 2단계 스마트 배정 엔진 적용된 업로드 함수
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2082,8 +2080,6 @@ const handleOcrUpload = async (event: Event) => {
     await img.decode()
 
     const worker = await createWorker('kor+eng')
-    
-    // 임시로 모든 슬롯의 OCR 스캔 결과 수집
     const scannedResults: { slot: string, player: Raw | null, isDgn: boolean }[] = []
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
@@ -2092,13 +2088,10 @@ const handleOcrUpload = async (event: Event) => {
 
       const { badgeUrl, nameUrl } = cropDualRegions(img, slot)
 
-      // 뱃지와 이름 각각 OCR 인식 수행
       const badgeRes = await worker.recognize(badgeUrl)
       const nameRes = await worker.recognize(nameUrl)
 
-      const combinedText = `${badgeRes.data.text} ${nameRes.data.text}`
       const matchedPlayer = findDetailedPlayer(nameRes.data.text, badgeRes.data.text, slot.pos)
-
       const isDgn = matchedPlayer ? String(matchedPlayer.grade || '').toUpperCase() === 'DGN' : false
 
       scannedResults.push({
@@ -2111,29 +2104,23 @@ const handleOcrUpload = async (event: Event) => {
     await worker.terminate()
     URL.revokeObjectURL(img.src)
 
-    // 🌟 [2단계 스마트 배정 로직 실행]
-    // 1단계: DGN이 아닌 일반 카드들 먼저 각자의 고유 주포지션 자리에 선점 배정
-    const assignedSlots = new Set<string>()
+    // 1단계: Non-DGN 카드 우선 배치
     const remainingPlayers: Raw[] = []
-
-    // 먼저 Non-DGN 카드 처리
     scannedResults.forEach(item => {
       if (!item.player) return
       if (!item.isDgn && isValidSlotForPlayer(item.player, item.slot)) {
         lineup.value[item.slot] = item.player
         initPlayerBuff(item.slot, item.player)
-        assignedSlots.add(item.slot)
       } else {
         remainingPlayers.push(item.player)
       }
     })
 
-    // 2단계: DGN 카드 및 남은 선수들을 빈자리 또는 DH 슬롯에 유연 배정
+    // 2단계: DGN 및 남은 선수 빈자리/DH 배정
     const emptySlots = ['LF', 'CF', 'RF', '3B', 'SS', '2B', '1B', 'C', 'DH'].filter(s => !lineup.value[s])
     
     remainingPlayers.forEach(player => {
       const validPos = getPlayerPositions(player)
-      // 빈자리 중 이 선수가 들어갈 수 있는 자리가 있다면 우선 배치
       const targetEmpty = emptySlots.find(s => validPos.includes(s) || s === 'DH')
       if (targetEmpty) {
         lineup.value[targetEmpty] = player
@@ -2151,85 +2138,6 @@ const handleOcrUpload = async (event: Event) => {
     isOcrProcessing.value = false
     ocrProgressText.value = ''
     if (ocrFileInput.value) ocrFileInput.value.value = ''
-  }
-}
-  
-const fileInput = ref<HTMLInputElement | null>(null)
-
-// 🌟 1. 공통 데이터 불러오기 (데이터 꼬임 방지 강력 버전) 🌟
-const applyLoadedData = (data: any) => {
-  try {
-    const emptyLineup = { C: null, '1B': null, '2B': null, '3B': null, SS: null, LF: null, CF: null, RF: null, DH: null, SP1: null, SP2: null, SP3: null, SP4: null, SP5: null, RP1: null, RP2: null, RP3: null, RP4: null, RP5: null, RP6: null, BENCH1: null, BENCH2: null, BENCH3: null, BENCH4: null, BENCH5: null, BENCH6: null, BENCH7: null, BENCH8: null };
-    
-    // 1️⃣ 라인업 데이터 파싱 (아직 반영 X)
-    let loadedLineups = { 1: JSON.parse(JSON.stringify(emptyLineup)), 2: JSON.parse(JSON.stringify(emptyLineup)) };
-    if (data.lineups) {
-      if (data.lineups[1]) Object.assign(loadedLineups[1], data.lineups[1]);
-      if (data.lineups[2]) Object.assign(loadedLineups[2], data.lineups[2]);
-    } else if (data.lineup) {
-      Object.assign(loadedLineups[1], data.lineup);
-    }
-
-    // 2️⃣ 글로벌 설정 덮어씌우기 (가장 먼저 안전하게 반영)
-    if (data.globalBuffsAll) {
-      if (data.globalBuffsAll[1]) Object.assign(globalBuffsAll[1], data.globalBuffsAll[1]);
-      if (data.globalBuffsAll[2]) Object.assign(globalBuffsAll[2], data.globalBuffsAll[2]);
-    } else if (data.globalBuffs) {
-      Object.assign(globalBuffsAll[1], data.globalBuffs);
-    }
-    
-    // 글로벌 설정 안전성 확보 (구버전에서 배열이 없거나 깨진 경우 강제 복구)
-    [1, 2].forEach(deckId => {
-      const gb = globalBuffsAll[deckId as 1|2] as any;
-      if (!gb.tacticLevels || !Array.isArray(gb.tacticLevels) || gb.tacticLevels.length !== 15) gb.tacticLevels = Array(15).fill(0);
-      if (!gb.synergyMasteries || !Array.isArray(gb.synergyMasteries)) gb.synergyMasteries = ['', '', '', '', ''];
-      if (!gb.binderMatrix || !Array.isArray(gb.binderMatrix)) gb.binderMatrix = Array(5).fill(0).map(() => ({ team: '', position: '', player: '', year: '', grade: '' }));
-      if (!gb.tacticCondRates || !Array.isArray(gb.tacticCondRates) || gb.tacticCondRates.length !== 15) gb.tacticCondRates = [5, 24.5, 20, 24.5, 21, 7.5, 30, 25.5, 25, 50, 0, 0, 50, 60, 32.5];
-      if (!gb.tacticBaseRates) gb.tacticBaseRates = { scoring: 50, cleanup: 40 };
-    });
-
-    // 3️⃣ 버프 데이터 파싱
-    let loadedAllPlayerBuffs: any = { 1: {}, 2: {} };
-    if (data.allPlayerBuffs) {
-      if (data.allPlayerBuffs[1]) loadedAllPlayerBuffs[1] = JSON.parse(JSON.stringify(data.allPlayerBuffs[1]));
-      if (data.allPlayerBuffs[2]) loadedAllPlayerBuffs[2] = JSON.parse(JSON.stringify(data.allPlayerBuffs[2]));
-    } else if (data.playerBuffs) {
-      loadedAllPlayerBuffs[1] = JSON.parse(JSON.stringify(data.playerBuffs));
-    }
-    
-    // 강제 속성 주입 (구버전에서 없는 속성 생성)
-    [1, 2].forEach(deckId => {
-      Object.keys(loadedLineups[deckId as 1|2]).forEach(slot => {
-        if (!loadedAllPlayerBuffs[deckId][slot]) {
-           loadedAllPlayerBuffs[deckId][slot] = {
-             enhancementLevel: 15, breakthroughLevel: 0, careerTeamCount: 0, hitAceBuff: 0, imprintStarterPower: 0, careerAllStatFlat: 0, imprintCoreStat: 0, careerCoreStat: 0, selectedSkills: [], battingOrder: null, playerLevel: 100, collectionBuff: 1200, careerLevelBuff: 149, binderBuff: 537, ultimateImprintPercent: 0, imprintStats: {}, careerStats: {}, imprint1: null, imprint2: null, careers: Array(6).fill(null).map(() => ({ grade: '마스터', statType: '', value: 0 }))
-           };
-        } else {
-           const b = loadedAllPlayerBuffs[deckId][slot];
-           if (!b.selectedSkills || !Array.isArray(b.selectedSkills)) b.selectedSkills = [];
-           if (!b.careers || !Array.isArray(b.careers)) b.careers = Array(6).fill(null).map(() => ({ grade: '마스터', statType: '', value: 0 }));
-           if (!b.imprintStats) b.imprintStats = {};
-           if (!b.careerStats) b.careerStats = {};
-           if (b.battingOrder === undefined) b.battingOrder = null;
-        }
-      });
-    });
-
-    // 4️⃣ 데이터 동시 적용 (반응성 크래시 완벽 차단)
-    // - 각인, 버프, 라인업 순서대로 반영하여 계산기가 null을 참조하지 않도록 함
-    if (data.imprintInventory) imprintInventory.value = JSON.parse(JSON.stringify(data.imprintInventory));
-    allPlayerBuffs.value = loadedAllPlayerBuffs;
-    lineups.value = loadedLineups;
-
-    if (data.multiSaves && Object.keys(data.multiSaves).length > 0) {
-      const existingSaves = JSON.parse(localStorage.getItem('9up_multi_saves') || '{}');
-      const mergedSaves = { ...existingSaves, ...data.multiSaves };
-      localStorage.setItem('9up_multi_saves', JSON.stringify(mergedSaves));
-    }
-    
-    selectedSlot.value = null; 
-  } catch (err) {
-    console.error("데이터 복구 중 치명적 오류 발생:", err);
   }
 }
 
