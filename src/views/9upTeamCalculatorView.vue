@@ -2141,6 +2141,8 @@ const handleOcrUpload = async (event: Event) => {
   }
 }
 
+const fileInput = ref<HTMLInputElement | null>(null)  
+
 // 🌟 라인업 초기화 (각인 장비는 무조건 유지!) 🌟
 const resetLineup = () => {
   if(!confirm(`현재 선택된 [DH${activeDeck.value}] 덱의 모든 선수를 비우시겠습니까?\n(포지션에 장착된 각인 수치는 그대로 유지됩니다)`)) return;
