@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [정밀 핀포인트 듀얼 머지 크롭] 배지 밸런스 + 이름표 우측/하단 노이즈 컷
+// 📸 [정밀 타이트 크롭 & 이진화 전처리 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,17 +2020,17 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 등급 배지 영역 (위쪽 빈 공간 축소, 아래쪽 잘림 방지를 위해 Y축과 높이 미세 조정)
-  const badgeX = cardX + (cardW * 0.12)
-  const badgeY = cardY + (cardH * 0.35) // 시작점을 살짝 아래로 내려 윗여백 축소
-  const badgeW = cardW * 0.45
-  const badgeH = cardH * 0.21 // 배지 하단이 잘리지 않도록 높이 확보
+  // 🌟 1. 상단 배지 영역: 위쪽 불필요한 여백을 더 자르고 배지만 타이트하게 타겟팅
+  const badgeX = cardX + (cardW * 0.15)
+  const badgeY = cardY + (cardH * 0.38) // Y를 더 내려서 위쪽 빈 공간 대폭 축소
+  const badgeW = cardW * 0.40
+  const badgeH = cardH * 0.16 // 높이를 타이트하게 조여서 배지만 집중 캡처
 
-  // 🌟 2. 하단 이름표 영역 (우측 폭을 줄여 옆 카드 침범 방지, 하단 Y축을 줄여 아래쪽 노이즈 컷)
-  const nameX = cardX + (cardW * 0.12) // 좌측 시작점
-  const nameY = cardY + (cardH * 0.76) // 이름표 상단 위치
-  const nameW = cardW * 0.68 // 🌟 우측 폭을 기존 0.80에서 0.68로 줄여서 옆 카드 일러스트 제거
-  const nameH = cardH * 0.18 // 🌟 하단 높이를 줄여서 이름 바 아래쪽 불필요한 이미지 컷트
+  // 🌟 2. 하단 이름표 영역: 우측 폭을 줄여 옆 카드 침범 방지, 하단 노이즈 컷
+  const nameX = cardX + (cardW * 0.12)
+  const nameY = cardY + (cardH * 0.75)
+  const nameW = cardW * 0.65 // 우측 폭을 더 좁혀서 옆 일러스트 완벽 차단
+  const nameH = cardH * 0.15 // 하단 높이를 줄여서 아래쪽 잔여 노이즈 컷트
 
   const scale = 3
   const badgeW_scaled = Math.round(badgeW * scale)
@@ -2039,20 +2039,40 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const nameH_scaled = Math.round(nameH * scale)
   const destW = Math.max(badgeW_scaled, nameW_scaled)
 
-  // 통합 캔버스 (위: 배지 / 아래: 이름표)
   canvas.width = destW
   canvas.height = badgeH_scaled + nameH_scaled + 15 // 사이 여백 15px
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#0f172a' // 깔끔한 다크 배경
+  ctx.fillStyle = '#000000' // 완전한 검은색 배경
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
   // 상단에 등급 배지 그리기
   ctx.drawImage(image, badgeX, badgeY, badgeW, badgeH, Math.round((destW - badgeW_scaled) / 2), 0, badgeW_scaled, badgeH_scaled)
   
-  // 하단에 이름표 그리기 (배지 바로 아래에 이어붙이기)
+  // 하단에 이름표 그리기
   ctx.drawImage(image, nameX, nameY, nameW, nameH, Math.round((destW - nameW_scaled) / 2), badgeH_scaled + 15, nameW_scaled, nameH_scaled)
+
+  // 🌟 3. [이진화 및 흑백 대비 극대화 전처리]
+  // 배경 그라데이션 노이즈를 날리고 흰색 글자만 쨍하게 살려 OCR 인식률 극대화
+  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  const data = imgData.data
+  for (let i = 0; i < data.length; i += 4) {
+    const r = data[i]
+    const g = data[i+1]
+    const b = data[i+2]
+    
+    // 그레이스케일(흑백) 변환
+    let v = 0.299 * r + 0.587 * g + 0.114 * b
+    
+    // 대비(Contrast) 강제 스트레칭: 어두운 배경은 더 시커맣게, 흰 글자는 더 하얗게 튜닝
+    v = v < 130 ? v * 0.3 : Math.min(255, v * 1.8 + 40)
+
+    data[i]   = v
+    data[i+1] = v
+    data[i+2] = v
+  }
+  ctx.putImageData(imgData, 0, 0)
 
   return {
     dualUrl: canvas.toDataURL('image/png')
