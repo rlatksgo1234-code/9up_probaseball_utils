@@ -1914,17 +1914,16 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 동적 카드 탐지 & OCR 자동 등록 엔진 (픽셀 외곽선 자동 추적)
+// 📸 듀얼 크롭(뱃지+이름) & 2단계 스마트 포지션 배정 OCR 엔진
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
 const ocrProgressText = ref('')
 
-// 🌟 FC 온라인식 카드 교체 모달 상태
+// FC 온라인식 카드 교체 모달 상태
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
-// 정확히 동일한 카드(이름 + 등급 + 연도)인지 판별 ('현재 장착 중' 표시용)
 const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   if (!c1 || !c2) return false
   const n1 = String(c1.name || '').trim()
@@ -1936,7 +1935,6 @@ const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   return n1 === n2 && g1 === g2 && y1 === y2
 }
 
-// 교체 모달 목록: 같은 이름이면서 해당 포지션에 장착 가능한 카드만 추출
 const swapCandidates = computed(() => {
   if (!swapTargetSlot.value) return []
   const currentP = lineup.value[swapTargetSlot.value]
@@ -1971,163 +1969,105 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
+// 9개 타자 슬롯 표준 좌표
+const OCR_SLOTS = [
+  { pos: 'LF',  x: 0.20, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'CF',  x: 0.40, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'RF',  x: 0.60, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'SS',  x: 0.30, y: 0.24, w: 0.14, h: 0.35 },
+  { pos: '2B',  x: 0.50, y: 0.24, w: 0.14, h: 0.35 },
+  { pos: '3B',  x: 0.20, y: 0.37, w: 0.14, h: 0.35 },
+  { pos: '1B',  x: 0.60, y: 0.37, w: 0.14, h: 0.35 },
+  { pos: 'C',   x: 0.40, y: 0.66, w: 0.14, h: 0.33 },
+  { pos: 'DH',  x: 0.52, y: 0.66, w: 0.14, h: 0.33 }
+]
+
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [핵심] 픽셀 스캔을 통해 화면 내 모든 카드의 네모난 외곽선(박스)을 동적으로 찾아내는 엔진
-const detectCardsDynamically = (img: HTMLImageElement) => {
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return []
+// 🌟 [듀얼 크롭] 뱃지 영역과 이름 영역을 각각 독립적으로 고해상도 캡처
+const cropDualRegions = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
+  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
+  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
+  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
+  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
 
-  const targetW = 800
-  const targetH = Math.round(targetW * (img.naturalHeight / img.naturalWidth))
-  canvas.width = targetW
-  canvas.height = targetH
-  ctx.drawImage(img, 0, 0, targetW, targetH)
+  // 1. 상단 좌측 뱃지/연도 영역 크롭 (예: HIT 83, TOP 등)
+  const badgeCanvas = document.createElement('canvas')
+  const badgeCtx = badgeCanvas.getContext('2d')
+  badgeCanvas.width = (sw * 0.5) * 2
+  badgeCanvas.height = (sh * 0.3) * 2
+  badgeCtx?.imageSmoothingEnabled(true)
+  badgeCtx?.drawImage(image, sx, sy, sw * 0.5, sh * 0.3, 0, 0, badgeCanvas.width, badgeCanvas.height)
 
-  const imgData = ctx.getImageData(0, 0, targetW, targetH)
-  const data = imgData.data
+  // 2. 하단 이름 바 영역 크롭 (예: 김종모 '83)
+  const nameCanvas = document.createElement('canvas')
+  const nameCtx = nameCanvas.getContext('2d')
+  nameCanvas.width = sw * 2
+  nameCanvas.height = (sh * 0.35) * 2
+  nameCtx?.imageSmoothingEnabled(true)
+  nameCtx?.drawImage(image, sx, sy + sh * 0.65, sw, sh * 0.35, 0, 0, nameCanvas.width, nameCanvas.height)
 
-  const visited = new Uint8Array(targetW * targetH)
-  const rawBoxes: { x: number, y: number, w: number, h: number }[] = []
-
-  // 1. 어두운 배경 속에서 밝게 빛나는 카드 영역(블롭) 탐색 (4픽셀 간격 샘플링)
-  for (let y = 0; y < targetH; y += 4) {
-    for (let x = 0; x < targetW; x += 4) {
-      const idx = (y * targetW + x) * 4
-      const avg = (data[idx] + data[idx + 1] + data[idx + 2]) / 3
-      
-      if (avg > 75 && !visited[y * targetW + x]) {
-        let minX = x, maxX = x, minY = y, maxY = y
-        let count = 0
-        const queue = [[x, y]]
-        visited[y * targetW + x] = 1
-
-        while (queue.length > 0 && queue.length < 4000) {
-          const [cx, cy] = queue.pop()!
-          count++
-          if (cx < minX) minX = cx
-          if (cx > maxX) maxX = cx
-          if (cy < minY) minY = cy
-          if (cy > maxY) maxY = cy
-
-          const neighbors = [[cx+4, cy], [cx-4, cy], [cx, cy+4], [cx, cy-4]]
-          for (const [nx, ny] of neighbors) {
-            if (nx >= 0 && nx < targetW && ny >= 0 && ny < targetH) {
-              const nIdx = (ny * targetW + nx) * 4
-              const nAvg = (data[nIdx] + data[nIdx+1] + data[nIdx+2]) / 3
-              if (nAvg > 75 && !visited[ny * targetW + nx]) {
-                visited[ny * targetW + nx] = 1
-                queue.push([nx, ny])
-              }
-            }
-          }
-        }
-
-        const bw = maxX - minX
-        const bh = maxY - minY
-        // 9UP 선수 카드 비율(약 0.65 ~ 0.85) 및 최소 크기 검증
-        if (count > 300 && bw > 35 && bh > 50 && (bw / bh > 0.6 && bw / bh < 0.9)) {
-          rawBoxes.push({ x: minX, y: minY, w: bw, h: bh })
-        }
-      }
-    }
+  return {
+    badgeUrl: badgeCanvas.toDataURL('image/png'),
+    nameUrl: nameCanvas.toDataURL('image/png')
   }
-
-  // 2. 너무 근접하게 중복 검출된 박스들 병합
-  const mergedBoxes: { x: number, y: number, w: number, h: number }[] = []
-  rawBoxes.sort((a, b) => a.y - b.y || a.x - b.x)
-
-  for (const box of rawBoxes) {
-    const existing = mergedBoxes.find(b => Math.abs(b.x - box.x) < 20 && Math.abs(b.y - box.y) < 20)
-    if (!existing) {
-      if (mergedBoxes.length < 9) mergedBoxes.push(box)
-    }
-  }
-
-  // 3. 만약 감지된 카드가 9개가 안 되거나 비정상적일 경우 원본 비율 기반 백업 좌표 제공
-  if (mergedBoxes.length < 7) {
-    console.warn("⚠️ 동적 카드 감지 실패, 기본 표준 그리드 좌표로 폴백합니다.")
-    const fallbackSlots = [
-      { pos: 'LF', x: 0.20, y: 0.10, w: 0.14, h: 0.35 },
-      { pos: 'CF', x: 0.40, y: 0.10, w: 0.14, h: 0.35 },
-      { pos: 'RF', x: 0.60, y: 0.10, w: 0.14, h: 0.35 },
-      { pos: 'SS', x: 0.30, y: 0.24, w: 0.14, h: 0.35 },
-      { pos: '2B', x: 0.50, y: 0.24, w: 0.14, h: 0.35 },
-      { pos: '3B', x: 0.20, y: 0.37, w: 0.14, h: 0.35 },
-      { pos: '1B', x: 0.60, y: 0.37, w: 0.14, h: 0.35 },
-      { pos: 'C',  x: 0.40, y: 0.66, w: 0.14, h: 0.33 },
-      { pos: 'DH', x: 0.52, y: 0.66, w: 0.14, h: 0.33 }
-    ]
-    return fallbackSlots.map(s => ({
-      pos: s.pos,
-      sx: img.naturalWidth * s.x,
-      sy: img.naturalHeight * s.y,
-      sw: img.naturalWidth * s.w,
-      sh: img.naturalHeight * s.h
-    }))
-  }
-
-  // 4. 감지된 9개의 박스를 Y축(위치) 및 X축 기준으로 정렬 후 9UP 다이아몬드 포지션 매핑
-  mergedBoxes.sort((a, b) => a.y - b.y)
-  
-  // 상단 행 (Y가 가장 작음): LF, CF, RF (X 좌표 순서대로 정렬)
-  const topRow = mergedBoxes.filter(b => b.y < mergedBoxes[0].y + 80).sort((a, b) => a.x - b.x)
-  // 하단 행 (Y가 가장 큼): C, DH
-  const bottomRow = mergedBoxes.filter(b => b.y > mergedBoxes[0].y + 350).sort((a, b) => a.x - b.x)
-  // 중간 행: SS, 2B, 3B, 1B 등
-  const middleRow = mergedBoxes.filter(b => !topRow.includes(b) && !bottomRow.includes(b)).sort((a, b) => a.x - b.x)
-
-  // 포지션 순서 재조합 배열 생성
-  const sortedDetected = [...topRow, ...middleRow, ...bottomRow]
-  const slotNames = ['LF', 'CF', 'RF', '3B', 'SS', '2B', '1B', 'C', 'DH']
-
-  const resultSlots = sortedDetected.map((box, index) => {
-    // 원본 이미지 크기 비율로 스케일 백
-    const scaleBack = img.naturalWidth / targetW
-    return {
-      pos: slotNames[index] || `SLOT${index}`,
-      sx: box.x * scaleBack,
-      sy: box.y * scaleBack,
-      sw: box.w * scaleBack,
-      sh: box.h * scaleBack
-    }
-  })
-
-  return resultSlots
 }
 
-// 선수 매칭 알고리즘
-const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
-  const cleanText = rawText.replace(/\s+/g, '')
+// 🌟 [정밀 매칭] 읽어낸 이름, 등급, 연도를 조합하여 정확한 선수 1장을 색출
+const findDetailedPlayer = (nameText: string, badgeText: string, targetPos: string): Raw | null => {
+  const cleanName = nameText.replace(/\s+/g, '')
+  const upperBadge = badgeText.toUpperCase()
 
+  // 1. 등급 판별 (HIT, TOP, DGN, GG 등)
+  let detectedGrade = ''
+  if (upperBadge.includes('HIT') || upperBadge.includes('히트')) detectedGrade = 'HIT'
+  else if (upperBadge.includes('TOP') || upperBadge.includes('탑')) detectedGrade = 'TOP'
+  else if (upperBadge.includes('DGN') || upperBadge.includes('디그')) detectedGrade = 'DGN'
+  else if (upperBadge.includes('ACE') || upperBadge.includes('에이스')) detectedGrade = 'ACE'
+  else if (upperBadge.includes('GG')) detectedGrade = 'GG'
+  else if (upperBadge.includes('MMVP') || upperBadge.includes('MVP')) detectedGrade = 'MMVP'
+
+  // 2. 연도 판별 (83, 99 등)
+  const yearMatch = badgeText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/)
+  const detectedYear = yearMatch ? yearMatch[1] : ''
+
+  // 3. 이름 후보군 필터링
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
-    return pName.length >= 2 && cleanText.includes(pName)
+    return pName.length >= 2 && cleanName.includes(pName)
   })
 
   if (candidates.length === 0) {
-    const words = rawText.match(/[가-힣]{2,4}/g) || []
-    for (const w of words) {
-      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
-      if (found.length > 0) {
-        candidates = found
-        break
-      }
-    }
+    candidates = players.value.filter(p => {
+      const pName = String(p.name || '').replace(/\s+/g, '')
+      return pName.length >= 2 && (cleanName.includes(pName.slice(0, 2)) || cleanName.includes(pName.slice(-2)))
+    })
   }
 
   if (candidates.length === 0) return null
 
+  // 4. 등급이 감지되었다면 등급 일치 우선 필터링
+  if (detectedGrade) {
+    const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
+    if (gradeFiltered.length > 0) candidates = gradeFiltered
+  }
+
+  // 5. 연도가 감지되었다면 연도 일치 우선 필터링
+  if (detectedYear) {
+    const yearFiltered = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
+    if (yearFiltered.length > 0) candidates = yearFiltered
+  }
+
+  // 6. 포지션 호환성 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
   return candidates[0]
 }
 
-// 스크린샷 일괄 인식 실행 함수 (동적 카드 탐지 적용)
+// 🌟 [2단계 스마트 배정 엔진 적용] 스크린샷 일괄 등록 실행
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2135,53 +2075,75 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = '스크린샷에서 카드 위치를 스캔하고 있습니다...'
+    ocrProgressText.value = 'OCR 엔진을 초기화하고 있습니다...'
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
     await img.decode()
 
-    // 🌟 동적으로 카드들의 실제 위치(바운딩 박스) 감지
-    const detectedSlots = detectCardsDynamically(img)
-    
     const worker = await createWorker('kor+eng')
-    let matchedCount = 0
+    
+    // 임시로 모든 슬롯의 OCR 스캔 결과 수집
+    const scannedResults: { slot: string, player: Raw | null, isDgn: boolean }[] = []
 
-    for (let i = 0; i < detectedSlots.length; i++) {
-      const slot = detectedSlots[i]
-      ocrProgressText.value = `[${i + 1}/${detectedSlots.length}] ${slot.pos} 카드 정보를 읽는 중...`
+    for (let i = 0; i < OCR_SLOTS.length; i++) {
+      const slot = OCR_SLOTS[i]
+      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 카드 스캔 중...`
 
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      if (!ctx) continue
+      const { badgeUrl, nameUrl } = cropDualRegions(img, slot)
 
-      canvas.width = slot.sw * 2
-      canvas.height = slot.sh * 2
-      ctx.imageSmoothingEnabled = true
-      ctx.drawImage(img, slot.sx, slot.sy, slot.sw, slot.sh, 0, 0, canvas.width, canvas.height)
-      const cardUrl = canvas.toDataURL('image/png')
+      // 뱃지와 이름 각각 OCR 인식 수행
+      const badgeRes = await worker.recognize(badgeUrl)
+      const nameRes = await worker.recognize(nameUrl)
 
-      const { data: { text } } = await worker.recognize(cardUrl)
-      const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
+      const combinedText = `${badgeRes.data.text} ${nameRes.data.text}`
+      const matchedPlayer = findDetailedPlayer(nameRes.data.text, badgeRes.data.text, slot.pos)
 
-      if (matchedPlayer) {
-        Object.keys(lineup.value).forEach(k => {
-          if (lineup.value[k] && isSameCard(lineup.value[k]!, matchedPlayer)) {
-            lineup.value[k] = null
-          }
-        })
+      const isDgn = matchedPlayer ? String(matchedPlayer.grade || '').toUpperCase() === 'DGN' : false
 
-        lineup.value[slot.pos] = matchedPlayer
-        initPlayerBuff(slot.pos, matchedPlayer)
-        matchedCount++
-      }
+      scannedResults.push({
+        slot: slot.pos,
+        player: matchedPlayer,
+        isDgn
+      })
     }
 
     await worker.terminate()
     URL.revokeObjectURL(img.src)
 
+    // 🌟 [2단계 스마트 배정 로직 실행]
+    // 1단계: DGN이 아닌 일반 카드들 먼저 각자의 고유 주포지션 자리에 선점 배정
+    const assignedSlots = new Set<string>()
+    const remainingPlayers: Raw[] = []
+
+    // 먼저 Non-DGN 카드 처리
+    scannedResults.forEach(item => {
+      if (!item.player) return
+      if (!item.isDgn && isValidSlotForPlayer(item.player, item.slot)) {
+        lineup.value[item.slot] = item.player
+        initPlayerBuff(item.slot, item.player)
+        assignedSlots.add(item.slot)
+      } else {
+        remainingPlayers.push(item.player)
+      }
+    })
+
+    // 2단계: DGN 카드 및 남은 선수들을 빈자리 또는 DH 슬롯에 유연 배정
+    const emptySlots = ['LF', 'CF', 'RF', '3B', 'SS', '2B', '1B', 'C', 'DH'].filter(s => !lineup.value[s])
+    
+    remainingPlayers.forEach(player => {
+      const validPos = getPlayerPositions(player)
+      // 빈자리 중 이 선수가 들어갈 수 있는 자리가 있다면 우선 배치
+      const targetEmpty = emptySlots.find(s => validPos.includes(s) || s === 'DH')
+      if (targetEmpty) {
+        lineup.value[targetEmpty] = player
+        initPlayerBuff(targetEmpty, player)
+        emptySlots.splice(emptySlots.indexOf(targetEmpty), 1)
+      }
+    })
+
     lineupViewMode.value = 'batter'
-    showToast(`라인업 등록 완료: 총 ${matchedCount}명의 선수가 자동으로 배치되었습니다!`, 'success')
+    showToast('라인업 스크린샷 분석 및 스마트 배정이 완료되었습니다!', 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
