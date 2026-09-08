@@ -2071,6 +2071,100 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
 }
 
 // ========================================================
+// 📸 [완전 일치 + 투수 배제 엔진]
+// ========================================================
+const processCardSlot = (rawText: string, targetPos: string): { player: Raw | null; name: string | null } => {
+  const cleanText = rawText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
+
+  // 1단계: 타자 DB 한정 (투수 카드 'SP', 'RP', 'CP' 배제)
+  const batterList = players.value.filter(p => !['SP', 'RP', 'CP'].includes(String(p.position).toUpperCase()))
+
+  // 2단계: 선수 이름 100% 완전 일치
+  let matchedName = ''
+  for (const p of batterList) {
+    const pName = String(p.name || '').trim()
+    if (pName.length >= 2 && cleanText.includes(pName)) {
+      matchedName = pName
+      break
+    }
+  }
+
+  // 2-1. 오독 대비 보조 매칭
+  if (!matchedName) {
+    for (const p of batterList) {
+      const pName = String(p.name || '').trim()
+      if (pName.length === 3 && cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
+        matchedName = pName
+        break
+      }
+    }
+  }
+
+  if (!matchedName) return { player: null, name: null }
+
+  // 3단계: 해당 타자의 DB 카드 목록
+  const candidates = batterList.filter(p => String(p.name || '').trim() === matchedName)
+  if (candidates.length <= 1) return { player: candidates[0] || null, name: matchedName }
+
+  // 4단계: 배지 텍스트 파싱
+  const upperRaw = rawText.toUpperCase()
+
+  // 연도 추출
+  const detectedYears: string[] = []
+  const quoted = rawText.match(/['’](\d{2})/)
+  if (quoted) detectedYears.push(quoted[1])
+  const yearMatches = Array.from(rawText.matchAll(/\b([89012]\d)\b/g))
+  for (const m of yearMatches) {
+    if (!detectedYears.includes(m[1])) detectedYears.push(m[1])
+  }
+
+  // 등급 추출
+  let detectedGrade = ''
+  if (/(?:HIT|H1T|H!T|H\|T|HT|HI7|히트)/i.test(upperRaw)) {
+    detectedGrade = 'HIT'
+  } else if (/(?:TOP|T0P|TDP|TOR|10P|탑)/i.test(upperRaw)) {
+    detectedGrade = 'TOP'
+  } else if (/(?:DGN|디그|D6N|IGN|OGN)/i.test(upperRaw)) {
+    detectedGrade = 'DGN'
+  } else if (/(?:GOLDEN|GLOVE|GG|골글)/i.test(upperRaw)) {
+    detectedGrade = 'GG'
+  }
+
+  // 5단계: 후보군 스코어링
+  let bestCard = candidates[0]
+  let maxScore = -999
+
+  for (const card of candidates) {
+    let score = 0
+    const cardGrade = getMappedGrade(card.grade)
+    const cardYears = getArray(card.year).map(y => String(y).replace(/\D/g, '').slice(-2))
+
+    if (detectedGrade) {
+      if (cardGrade === detectedGrade) score += 40
+      else score -= 20
+    } else {
+      if (cardGrade === 'HIT' || cardGrade === 'TOP') score += 10
+      else if (cardGrade === 'DGN') score -= 10
+    }
+
+    if (detectedYears.length > 0 && cardYears.some(y => detectedYears.includes(y))) {
+      score += 50
+    }
+
+    if (isValidSlotForPlayer(card, targetPos)) {
+      score += 5
+    }
+
+    if (score > maxScore) {
+      maxScore = score
+      bestCard = card
+    }
+  }
+
+  return { player: bestCard, name: matchedName }
+}
+  
+// ========================================================
 // 📸 [스크린샷 일괄 등록 및 단일 통합 화이트리스트 OCR 실행]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
