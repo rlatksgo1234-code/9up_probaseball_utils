@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (누락 함수 복구 완료)
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (최종 완성형)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1924,7 +1924,7 @@ const ocrProgressText = ref('')
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
-// 이름 + 등급 + 연도가 완벽히 일치하는지 판별
+// 정확히 동일한 카드(이름 + 등급 + 연도)인지 판별 ('현재 장착 중' 표시용)
 const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   if (!c1 || !c2) return false
   const n1 = String(c1.name || '').trim()
@@ -1936,7 +1936,7 @@ const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   return n1 === n2 && g1 === g2 && y1 === y2
 }
 
-// 이름 일치 + 해당 슬롯(CF 등)에 장착 가능한 포지션 카드만 필터링
+// 🌟 교체 모달 목록: 같은 이름이면서 해당 포지션(CF 등)에 장착 가능한 카드만 추출
 const swapCandidates = computed(() => {
   if (!swapTargetSlot.value) return []
   const currentP = lineup.value[swapTargetSlot.value]
@@ -1971,26 +1971,24 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [좌표 높이 0.34 확장] LF 김종모, RF 양준혁 하단 이름표 잘림 완벽 방지
+// 🌟 9개 타자 슬롯 좌표 (이름표가 잘리지 않도록 넉넉하게 확장된 표준 좌표)
 const OCR_SLOTS = [
-  { pos: 'LF',  x: 0.21, y: 0.10, w: 0.13, h: 0.34 },
-  { pos: 'CF',  x: 0.41, y: 0.10, w: 0.13, h: 0.34 },
-  { pos: 'RF',  x: 0.61, y: 0.10, w: 0.13, h: 0.34 },
-  { pos: 'SS',  x: 0.31, y: 0.25, w: 0.13, h: 0.34 },
-  { pos: '2B',  x: 0.51, y: 0.25, w: 0.13, h: 0.34 },
-  { pos: '3B',  x: 0.21, y: 0.38, w: 0.13, h: 0.34 },
-  { pos: 'SP1', x: 0.41, y: 0.38, w: 0.13, h: 0.34 },
-  { pos: '1B',  x: 0.61, y: 0.38, w: 0.13, h: 0.34 },
-  { pos: 'C',   x: 0.41, y: 0.67, w: 0.13, h: 0.32 },
-  { pos: 'DH',  x: 0.52, y: 0.67, w: 0.13, h: 0.32 }
+  { pos: 'LF',  x: 0.20, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'CF',  x: 0.40, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'RF',  x: 0.60, y: 0.10, w: 0.14, h: 0.35 },
+  { pos: 'SS',  x: 0.30, y: 0.24, w: 0.14, h: 0.35 },
+  { pos: '2B',  x: 0.50, y: 0.24, w: 0.14, h: 0.35 },
+  { pos: '3B',  x: 0.20, y: 0.37, w: 0.14, h: 0.35 },
+  { pos: '1B',  x: 0.60, y: 0.37, w: 0.14, h: 0.35 },
+  { pos: 'C',   x: 0.40, y: 0.66, w: 0.14, h: 0.33 },
+  { pos: 'DH',  x: 0.52, y: 0.66, w: 0.14, h: 0.33 }
 ]
 
-// 🌟 [복구됨] 파일 클릭 트리거 함수
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [복구됨] 캔버스 2배 무손실 크롭 함수
+// 캔버스 2배 확대 무손실 크롭
 const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2009,67 +2007,31 @@ const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   return canvas.toDataURL('image/png')
 }
 
-// 선수 매칭 알고리즘
+// 🌟 [핵심] 위치(슬롯)가 곧 포지션이 되므로, 이름만 확실히 찾아 DB의 첫 번째 카드를 매칭
 const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1. 풀네임 매칭
+  // 1. 이름 매칭 (DB 선수명 포함 여부)
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 2. 2글자 유사도 매칭 (글자 일부 빗나감 대응)
+  // 2. 부분 일치 보조 매칭 (글자 일부가 마스킹되었을 때)
   if (candidates.length === 0) {
-    const matchedBySub = players.value.filter(p => {
-      const pName = String(p.name || '').replace(/\s+/g, '')
-      if (pName.length < 2) return false
-      const prefix = pName.slice(0, 2)
-      const suffix = pName.slice(-2)
-      return cleanText.includes(prefix) || cleanText.includes(suffix)
-    })
-    const posMatched = matchedBySub.filter(p => isValidSlotForPlayer(p, targetPos))
-    candidates = posMatched.length > 0 ? posMatched : matchedBySub
-  }
-
-  if (candidates.length === 0) return null
-  if (candidates.length === 1) return candidates[0]
-
-  // 3. 등급 뱃지 필터링
-  const upper = rawText.toUpperCase()
-  let detectedGrade = ''
-  if (upper.includes('HIT') || upper.includes('히트')) detectedGrade = 'HIT'
-  else if (upper.includes('TOP') || upper.includes('탑')) detectedGrade = 'TOP'
-  else if (upper.includes('DGN') || upper.includes('DIGNITY') || upper.includes('디그')) detectedGrade = 'DGN'
-  else if (upper.includes('ACE') || upper.includes('에이스')) detectedGrade = 'ACE'
-  else if (upper.includes('GGY') || upper.includes('연도골글') || upper.includes('연글')) detectedGrade = 'GGY'
-  else if (upper.includes('GG') || upper.includes('골글')) detectedGrade = 'GG'
-  else if (upper.includes('MMVP') || upper.includes('MVP')) detectedGrade = 'MMVP'
-
-  if (detectedGrade) {
-    const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
-    if (gradeFiltered.length > 0) candidates = gradeFiltered
-  }
-  if (candidates.length === 1) return candidates[0]
-
-  // 4. 연도 인식 및 83 <-> 88 / 82 교정
-  const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
-  if (yearMatches && yearMatches.length > 0) {
-    const detectedYear = yearMatches[yearMatches.length - 1]
-    const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
-    if (exact.length > 0) return exact[0]
-
-    const altYears: string[] = []
-    if (detectedYear === '88' || detectedYear === '82') altYears.push('83')
-    if (detectedYear === '83') altYears.push('88', '82')
-
-    for (const ay of altYears) {
-      const altMatch = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(ay)))
-      if (altMatch.length > 0) return altMatch[0]
+    const words = rawText.match(/[가-힣]{2,4}/g) || []
+    for (const w of words) {
+      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
+      if (found.length > 0) {
+        candidates = found
+        break
+      }
     }
   }
 
-  // 5. 슬롯 포지션 최종 검증
+  if (candidates.length === 0) return null
+
+  // 3. 해당 포지션(LF, CF 등)에 장착 가능한 후보 우선 정렬
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
