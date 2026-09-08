@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (안정화 버전)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1924,12 +1924,31 @@ const ocrProgressText = ref('')
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
+// 정확히 동일한 카드(이름 + 등급 + 연도)인지 판별하는 도우미 함수
+const isSameCard = (c1: Raw | null, c2: Raw | null) => {
+  if (!c1 || !c2) return false
+  const n1 = String(c1.name || '').trim()
+  const n2 = String(c2.name || '').trim()
+  const g1 = getMappedGrade(c1.grade)
+  const g2 = getMappedGrade(c2.grade)
+  const y1 = String(c1.year || '').replace(/[\[\]\s]/g, '')
+  const y2 = String(c2.year || '').replace(/[\[\]\s]/g, '')
+  return n1 === n2 && g1 === g2 && y1 === y2
+}
+
+// 🌟 [수정됨] 이름 일치 + 현재 슬롯(CF 등)에 출전 가능한 카드만 필터링!
 const swapCandidates = computed(() => {
   if (!swapTargetSlot.value) return []
   const currentP = lineup.value[swapTargetSlot.value]
   if (!currentP) return []
   const cleanName = String(currentP.name || '').replace(/\s+/g, '')
-  return players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === cleanName)
+  
+  return players.value.filter(p => {
+    const isNameMatch = String(p.name || '').replace(/\s+/g, '') === cleanName
+    if (!isNameMatch) return false
+    // 해당 슬롯(CF, LF 등)에 들어갈 수 있는 카드만 통과!
+    return isValidSlotForPlayer(p, swapTargetSlot.value!)
+  })
 })
 
 const openCardSwapModal = (slot: string) => {
@@ -1943,7 +1962,7 @@ const applyCardSwap = (newCard: Raw) => {
   
   // 중복 카드 이전 자리 비우기
   Object.keys(lineup.value).forEach(k => {
-    if (lineup.value[k] && isSamePlayer(lineup.value[k]!, newCard) && k !== slot) {
+    if (lineup.value[k] && isSameCard(lineup.value[k]!, newCard) && k !== slot) {
       lineup.value[k] = null
     }
   })
@@ -1972,60 +1991,60 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 캔버스 크롭 도우미 (3배율 고해상도 확대 + 흑백 대비 강화)
-const cropRegion = (image: HTMLImageElement, rx: number, ry: number, rw: number, rh: number, contrast: boolean = false) => {
+// 🌟 [복구됨] 9명 전원 인식에 성공했던 무손실 2배율 원본 크롭 방식
+const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   if (!ctx) return null
 
-  const sx = Math.max(0, Math.round(rx))
-  const sy = Math.max(0, Math.round(ry))
-  const sw = Math.min(image.naturalWidth - sx, Math.round(rw))
-  const sh = Math.min(image.naturalHeight - sy, Math.round(rh))
+  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
+  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
+  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
+  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
 
-  canvas.width = sw * 3
-  canvas.height = sh * 3
+  canvas.width = sw * 2
+  canvas.height = sh * 2
   ctx.imageSmoothingEnabled = true
   ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-
-  if (contrast) {
-    const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    const d = imgData.data
-    for (let i = 0; i < d.length; i += 4) {
-      const avg = (d[i] + d[i+1] + d[i+2]) / 3
-      const val = avg > 115 ? 255 : 0
-      d[i] = d[i+1] = d[i+2] = val
-    }
-    ctx.putImageData(imgData, 0, 0)
-  }
 
   return canvas.toDataURL('image/png')
 }
 
-// 선수 매칭 알고리즘 (이름 + 뱃지 텍스트 결합)
-const findBestMatchingPlayer = (nameText: string, badgeText: string, targetPos: string): Raw | null => {
-  const cleanName = nameText.replace(/[^가-힣]/g, '').trim()
-  if (cleanName.length < 2) return null
+// 선수 매칭 알고리즘 (이름 + 등급 + 연도 지능형 결합)
+const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
+  const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1. 이름으로 1차 DB 후보군 추출
+  // 1. 이름 매칭 (DB의 선수명이 텍스트에 포함되어 있는지)
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
-    return pName.includes(cleanName) || cleanName.includes(pName)
+    return pName.length >= 2 && cleanText.includes(pName)
   })
+
+  // 단어 단위 역추적 (텍스트 공백 이슈 대응)
+  if (candidates.length === 0) {
+    const words = rawText.match(/[가-힣]{2,4}/g) || []
+    for (const w of words) {
+      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
+      if (found.length > 0) {
+        candidates = found
+        break
+      }
+    }
+  }
 
   if (candidates.length === 0) return null
   if (candidates.length === 1) return candidates[0]
 
-  // 2. 뱃지 텍스트 파싱 (유연한 오타 허용)
-  const upperBadge = badgeText.toUpperCase().replace(/\s+/g, '')
+  // 2. 뱃지 등급 감지 (HIT, TOP, DGN 등)
+  const upper = rawText.toUpperCase()
   let detectedGrade = ''
-  if (upperBadge.match(/HIT|H1T|H!T|히트/)) detectedGrade = 'HIT'
-  else if (upperBadge.match(/TOP|T0P|탑/)) detectedGrade = 'TOP'
-  else if (upperBadge.match(/DGN|DIGNITY|디그/)) detectedGrade = 'DGN'
-  else if (upperBadge.match(/ACE|에이스/)) detectedGrade = 'ACE'
-  else if (upperBadge.match(/GGY|연도골글|연글/)) detectedGrade = 'GGY'
-  else if (upperBadge.match(/GG|골글/)) detectedGrade = 'GG'
-  else if (upperBadge.match(/MMVP|MVP/)) detectedGrade = 'MMVP'
+  if (upper.includes('HIT') || upper.includes('히트')) detectedGrade = 'HIT'
+  else if (upper.includes('TOP') || upper.includes('탑')) detectedGrade = 'TOP'
+  else if (upper.includes('DGN') || upper.includes('DIGNITY') || upper.includes('디그')) detectedGrade = 'DGN'
+  else if (upper.includes('ACE') || upper.includes('에이스')) detectedGrade = 'ACE'
+  else if (upper.includes('GGY') || upper.includes('연도골글') || upper.includes('연글')) detectedGrade = 'GGY'
+  else if (upper.includes('GG') || upper.includes('골글')) detectedGrade = 'GG'
+  else if (upper.includes('MMVP') || upper.includes('MVP')) detectedGrade = 'MMVP'
 
   if (detectedGrade) {
     const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
@@ -2033,11 +2052,12 @@ const findBestMatchingPlayer = (nameText: string, badgeText: string, targetPos: 
   }
   if (candidates.length === 1) return candidates[0]
 
-  // 3. 연도 매칭 (숫자 3 <-> 8 보정 포함)
-  const yearMatch = upperBadge.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/)
-  const detectedYear = yearMatch ? yearMatch[1] : ''
-
-  if (detectedYear) {
+  // 3. 연도 인식 및 숫자 83 <-> 88 교정
+  const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
+  if (yearMatches && yearMatches.length > 0) {
+    const detectedYear = yearMatches[yearMatches.length - 1]
+    
+    // 정확 일치
     const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (exact.length > 0) return exact[0]
 
@@ -2049,14 +2069,14 @@ const findBestMatchingPlayer = (nameText: string, badgeText: string, targetPos: 
     }
   }
 
-  // 4. 포지션 적합성 검증
+  // 4. 슬롯 포지션 적합성 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
   return candidates[0]
 }
 
-// 스크린샷 일괄 인식 실행 함수
+// 스크린샷 일괄 인식 실행 함수 (단일 패스로 속도와 안정성 2배 향상)
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2064,7 +2084,7 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = 'OCR 엔진을 초기화하고 있습니다...'
+    ocrProgressText.value = 'OCR 엔진을 시작하고 있습니다...'
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
@@ -2077,24 +2097,14 @@ const handleOcrUpload = async (event: Event) => {
       const slot = OCR_SLOTS[i]
       ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 카드를 인식하는 중...`
 
-      const cardX = img.naturalWidth * slot.x
-      const cardY = img.naturalHeight * slot.y
-      const cardW = img.naturalWidth * slot.w
-      const cardH = img.naturalHeight * slot.h
+      const cardUrl = cropCardSlot(img, slot)
+      if (!cardUrl) continue
 
-      // A. 이름 영역 (하단 22% 검은 바)
-      const nameUrl = cropRegion(img, cardX, cardY + cardH * 0.78, cardW, cardH * 0.22, true)
-      // B. 뱃지 영역 (상단 좌측 20%~55%)
-      const badgeUrl = cropRegion(img, cardX, cardY + cardH * 0.20, cardW * 0.75, cardH * 0.35, false)
-
-      if (!nameUrl || !badgeUrl) continue
-
-      const nameRes = await worker.recognize(nameUrl)
-      const badgeRes = await worker.recognize(badgeUrl)
-
-      const matchedPlayer = findBestMatchingPlayer(nameRes.data.text, badgeRes.data.text, slot.pos)
+      const { data: { text } } = await worker.recognize(cardUrl)
+      const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
 
       if (matchedPlayer) {
+        // 이미 다른 슬롯에 등록되어 있다면 이전 슬롯 비우기
         Object.keys(lineup.value).forEach(k => {
           if (lineup.value[k] && isSamePlayer(lineup.value[k]!, matchedPlayer)) {
             lineup.value[k] = null
@@ -3877,7 +3887,7 @@ const getPlayerImage = (p: Raw | null) => {
          <div v-for="cand in swapCandidates" :key="cand.id || (cand.name + cand.grade + cand.year)"
               @click="applyCardSwap(cand)"
               class="flex items-center justify-between p-2.5 rounded-xl border bg-white dark:bg-neutral-800 cursor-pointer transition-all hover:border-indigo-500 hover:shadow-md"
-              :class="isSamePlayer(lineup[swapTargetSlot]!, cand) ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 ring-1 ring-indigo-400' : 'border-neutral-200 dark:border-neutral-700'">
+              :class="isSameCard(lineup[swapTargetSlot]!, cand) ? 'border-indigo-500 bg-indigo-50/50 dark:bg-indigo-900/20 ring-1 ring-indigo-400' : 'border-neutral-200 dark:border-neutral-700'">
             
             <div class="flex items-center gap-3">
                <!-- 등급 뱃지 이미지 -->
@@ -3893,7 +3903,7 @@ const getPlayerImage = (p: Raw | null) => {
                      <span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300 border border-neutral-200 dark:border-neutral-600">
                         {{ cand.grade }}
                      </span>
-                     <span v-if="isSamePlayer(lineup[swapTargetSlot]!, cand)" class="text-[10px] font-black text-indigo-600 bg-indigo-100 dark:bg-indigo-900/50 px-1.5 py-0.5 rounded">
+                     <span v-if="isSameCard(lineup[swapTargetSlot]!, cand)" class="text-[10px] font-black text-indigo-600 bg-indigo-100 dark:bg-indigo-900/50 px-1.5 py-0.5 rounded">
                         현재 장착 중
                      </span>
                   </div>
