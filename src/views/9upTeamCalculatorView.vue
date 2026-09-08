@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (좌표 확장 + 유사도 매칭)
+// 📸 인게임 스크린샷 OCR 엔진 & FC온라인식 카드 교체 시스템 (누락 함수 복구 완료)
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1924,7 +1924,7 @@ const ocrProgressText = ref('')
 const showCardSwapModal = ref(false)
 const swapTargetSlot = ref<string | null>(null)
 
-// 이름 + 등급 + 연도가 완벽히 일치하는지 판별 ('현재 장착 중' 중복 방지)
+// 이름 + 등급 + 연도가 완벽히 일치하는지 판별
 const isSameCard = (c1: Raw | null, c2: Raw | null) => {
   if (!c1 || !c2) return false
   const n1 = String(c1.name || '').trim()
@@ -1971,7 +1971,7 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 🌟 [수정] 카드 하단 이름 바까지 넉넉하게 포함하도록 높이(h)를 0.34로 확장
+// 🌟 [좌표 높이 0.34 확장] LF 김종모, RF 양준혁 하단 이름표 잘림 완벽 방지
 const OCR_SLOTS = [
   { pos: 'LF',  x: 0.21, y: 0.10, w: 0.13, h: 0.34 },
   { pos: 'CF',  x: 0.41, y: 0.10, w: 0.13, h: 0.34 },
@@ -1985,17 +1985,41 @@ const OCR_SLOTS = [
   { pos: 'DH',  x: 0.52, y: 0.67, w: 0.13, h: 0.32 }
 ]
 
-// 🌟 [수정] 김종모, 양준혁 전용 보정 및 2글자 매칭 강화
+// 🌟 [복구됨] 파일 클릭 트리거 함수
+const triggerOcrInput = () => {
+  ocrFileInput.value?.click()
+}
+
+// 🌟 [복구됨] 캔버스 2배 무손실 크롭 함수
+const cropCardSlot = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
+  const canvas = document.createElement('canvas')
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+
+  const sx = Math.max(0, Math.round(image.naturalWidth * slot.x))
+  const sy = Math.max(0, Math.round(image.naturalHeight * slot.y))
+  const sw = Math.min(image.naturalWidth - sx, Math.round(image.naturalWidth * slot.w))
+  const sh = Math.min(image.naturalHeight - sy, Math.round(image.naturalHeight * slot.h))
+
+  canvas.width = sw * 2
+  canvas.height = sh * 2
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
+
+  return canvas.toDataURL('image/png')
+}
+
+// 선수 매칭 알고리즘
 const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
 
-  // 1. 3글자 풀네임 매칭
+  // 1. 풀네임 매칭
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 2. 풀네임 미검출 시 앞/뒤 2글자 매칭 (종모, 양준 등)
+  // 2. 2글자 유사도 매칭 (글자 일부 빗나감 대응)
   if (candidates.length === 0) {
     const matchedBySub = players.value.filter(p => {
       const pName = String(p.name || '').replace(/\s+/g, '')
@@ -2004,8 +2028,6 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
       const suffix = pName.slice(-2)
       return cleanText.includes(prefix) || cleanText.includes(suffix)
     })
-    
-    // 해당 포지션 적합 카드 우선
     const posMatched = matchedBySub.filter(p => isValidSlotForPlayer(p, targetPos))
     candidates = posMatched.length > 0 ? posMatched : matchedBySub
   }
@@ -2030,16 +2052,13 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
   }
   if (candidates.length === 1) return candidates[0]
 
-  // 4. 연도 인식 및 숫자 83 <-> 88 / 82 교정
+  // 4. 연도 인식 및 83 <-> 88 / 82 교정
   const yearMatches = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/g)
   if (yearMatches && yearMatches.length > 0) {
     const detectedYear = yearMatches[yearMatches.length - 1]
-    
-    // 정확 일치
     const exact = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (exact.length > 0) return exact[0]
 
-    // 83이 88이나 82로 오독된 경우
     const altYears: string[] = []
     if (detectedYear === '88' || detectedYear === '82') altYears.push('83')
     if (detectedYear === '83') altYears.push('88', '82')
@@ -2050,7 +2069,7 @@ const findBestMatchingPlayer = (rawText: string, targetPos: string): Raw | null 
     }
   }
 
-  // 5. 포지션 최종 검증
+  // 5. 슬롯 포지션 최종 검증
   const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
   if (posFiltered.length > 0) return posFiltered[0]
 
@@ -2083,9 +2102,6 @@ const handleOcrUpload = async (event: Event) => {
 
       const { data: { text } } = await worker.recognize(cardUrl)
       const matchedPlayer = findBestMatchingPlayer(text, slot.pos)
-      
-      // 디버깅용 콘솔 로그 (F12에서 확인 가능)
-      console.log(`[OCR ${slot.pos}] 추출 텍스트: "${text.replace(/\n/g, ' ')}" -> 매칭 결과:`, matchedPlayer?.name || '실패')
 
       if (matchedPlayer) {
         Object.keys(lineup.value).forEach(k => {
