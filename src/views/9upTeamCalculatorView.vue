@@ -1920,9 +1920,11 @@ const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
 const ocrProgressText = ref('')
 
+// 디버그 인터페이스 수정
 interface OcrDebugItem {
   slot: string
-  imgUrl: string
+  badgeImgUrl: string // 배지 이미지 추가
+  nameImgUrl: string  // 이름 이미지 추가
   rawText: string
   matchedName: string | null
   matchedCard: string | null
@@ -2004,6 +2006,7 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
+// 📸 [상단 배지 / 하단 이름표 독립 분리 크롭 엔진]
 const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const imgW = image.naturalWidth
   const imgH = image.naturalHeight
@@ -2014,18 +2017,16 @@ const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0])
   const cardH = imgH * slot.h
 
   // 1. 상단 배지 영역 (HIT, TOP, DGN 등 영문/숫자 전용)
-  // 카드 좌측 중앙에 위치한 뱃지만 타겟팅
   const badgeX = cardX + (cardW * 0.05)
-  const badgeY = cardY + (cardH * 0.38)
+  const badgeY = cardY + (cardH * 0.48) // 0.40에서 0.48로 내려서 뱃지 중앙 타겟팅
   const badgeW = cardW * 0.45
-  const badgeH = cardH * 0.20
+  const badgeH = cardH * 0.16
 
   // 2. 하단 이름표 영역 (선수 이름 전용)
-  // 0.73 -> 0.82로 대폭 내려서 불필요한 파워 스탯 숫자 배제
-  const nameX = cardX + (cardW * 0.15)
-  const nameY = cardY + (cardH * 0.82) 
-  const nameW = cardW * 0.70
-  const nameH = cardH * 0.15
+  const nameX = cardX + (cardW * 0.10)
+  const nameY = cardY + (cardH * 0.78) // 0.82는 너무 깊음. 0.78 지점이 이름 텍스트 위치
+  const nameW = cardW * 0.80
+  const nameH = cardH * 0.13
 
   const scale = 3
   const padding = 8
@@ -2143,9 +2144,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
   return { player: bestCard, name: matchedName }
 }
 
-// ========================================================
-// 📸 [영문/한글 워커 분리 전용 고속 OCR 실행 함수]
-// ========================================================
+// OCR 실행 함수 수정
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2160,13 +2159,13 @@ const handleOcrUpload = async (event: Event) => {
     img.src = URL.createObjectURL(file)
     await img.decode()
 
-    // 🌟 영문 전용 워커와 한글 전용 워커를 각각 독립적으로 생성하여 충돌 원천 방지
     const engWorker = await createWorker('eng')
     const korWorker = await createWorker('kor')
 
     await engWorker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
     })
+    // ❌ 주의: korWorker.setParameters(...) 부분은 완전히 삭제했습니다!
 
     let matchedCount = 0
 
@@ -2177,18 +2176,17 @@ const handleOcrUpload = async (event: Event) => {
       const { badgeUrl, nameUrl } = cropSplitCardImages(img, slot)
       if (!badgeUrl || !nameUrl) continue
 
-      // 상단 배지는 영문 워커로 스캔
       const { data: { text: badgeText } } = await engWorker.recognize(badgeUrl)
-      // 하단 이름은 한글 워커로 스캔
       const { data: { text: nameText } } = await korWorker.recognize(nameUrl)
 
-      // 두 결과를 하나로 결합
       const combinedText = `${badgeText} ${nameText}`
       const { player: matchedPlayer, name: foundName } = processCardSlot(combinedText, slot.pos)
 
+      // 디버그 리스트에 배지와 이름 이미지를 둘 다 넘김
       ocrDebugList.value.push({
         slot: slot.pos,
-        imgUrl: nameUrl, 
+        badgeImgUrl: badgeUrl,
+        nameImgUrl: nameUrl,
         rawText: `[배지] ${badgeText.trim()} / [이름] ${nameText.trim()}`,
         matchedName: foundName,
         matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
