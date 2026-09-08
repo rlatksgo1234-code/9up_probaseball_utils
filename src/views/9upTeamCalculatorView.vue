@@ -2005,13 +2005,9 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [이진화 필터가 적용된 정밀 크롭 엔진]
+// 📸 [상단 배지 / 하단 이름표 독립 분리 크롭 엔진]
 // ========================================================
-const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
-  const canvas = document.createElement('canvas')
-  const ctx = canvas.getContext('2d')
-  if (!ctx) return { dualUrl: null }
-
+const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const imgW = image.naturalWidth
   const imgH = image.naturalHeight
 
@@ -2020,64 +2016,46 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 상단 배지 및 하단 이름표 정밀 좌표
+  // 1. 상단 배지 영역 (영어/숫자 전용 크롭)
   const badgeX = cardX + (cardW * 0.14)
   const badgeY = cardY + (cardH * 0.40)
   const badgeW = cardW * 0.32
   const badgeH = cardH * 0.16
 
+  // 2. 하단 이름표 영역 (한글 전용 크롭)
   const nameX = cardX + (cardW * 0.12)
   const nameY = cardY + (cardH * 0.73)
   const nameW = cardW * 0.65
   const nameH = cardH * 0.15
 
   const scale = 3
-  const badgeW_scaled = Math.round(badgeW * scale)
-  const badgeH_scaled = Math.round(badgeH * scale)
-  const nameW_scaled = Math.round(nameW * scale)
-  const nameH_scaled = Math.round(nameH * scale)
-  
-  const padding = 12
-  const destW = Math.max(badgeW_scaled, nameW_scaled) + (padding * 2)
+  const padding = 8
 
-  canvas.width = destW
-  canvas.height = badgeH_scaled + nameH_scaled + (padding * 3)
+  // --- 상단 배지 캔버스 생성 ---
+  const badgeCanvas = document.createElement('canvas')
+  const badgeCtx = badgeCanvas.getContext('2d')
+  if (!badgeCtx) return { badgeUrl: null, nameUrl: null }
 
-  ctx.imageSmoothingEnabled = true
-  ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#000000'
-  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  badgeCanvas.width = Math.round(badgeW * scale) + (padding * 2)
+  badgeCanvas.height = Math.round(badgeH * scale) + (padding * 2)
+  badgeCtx.fillStyle = '#000000'
+  badgeCtx.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height)
+  badgeCtx.drawImage(image, badgeX, badgeY, badgeW, badgeH, padding, padding, badgeCanvas.width - (padding * 2), badgeCanvas.height - (padding * 2))
 
-  ctx.drawImage(
-    image, badgeX, badgeY, badgeW, badgeH, 
-    padding + Math.round((destW - badgeW_scaled - (padding * 2)) / 2), 
-    padding, 
-    badgeW_scaled, badgeH_scaled
-  )
-  
-  ctx.drawImage(
-    image, nameX, nameY, nameW, nameH, 
-    padding + Math.round((destW - nameW_scaled - (padding * 2)) / 2), 
-    badgeH_scaled + (padding * 2), 
-    nameW_scaled, nameH_scaled
-  )
+  // --- 하단 이름표 캔버스 생성 ---
+  const nameCanvas = document.createElement('canvas')
+  const nameCtx = nameCanvas.getContext('2d')
+  if (!nameCtx) return { badgeUrl: null, nameUrl: null }
 
-  // 🌟 [핵심 추가] 캔버스 픽셀 이진화(Thresholding) 처리
-  // 배경 노이즈를 날리고 글자 가독성을 극대화합니다.
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  const data = imgData.data
-  for (let i = 0; i < data.length; i += 4) {
-    const avg = (data[i] + data[i + 1] + data[i + 2]) / 3
-    const threshold = 140 // 밝기 기준점 (상황에 따라 조절 가능)
-    const val = avg > threshold ? 255 : 0
-    data[i]     = val
-    data[i + 1] = val
-    data[i + 2] = val
-  }
-  ctx.putImageData(imgData, 0, 0)
+  nameCanvas.width = Math.round(nameW * scale) + (padding * 2)
+  nameCanvas.height = Math.round(nameH * scale) + (padding * 2)
+  nameCtx.fillStyle = '#000000'
+  nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
+  nameCtx.drawImage(image, nameX, nameY, nameW, nameH, padding, padding, nameCanvas.width - (padding * 2), nameCanvas.height - (padding * 2))
 
   return {
-    dualUrl: canvas.toDataURL('image/png')
+    badgeUrl: badgeCanvas.toDataURL('image/png'),
+    nameUrl: nameCanvas.toDataURL('image/png')
   }
 }
   
@@ -2167,7 +2145,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
 }
 
 // ========================================================
-// 📸 [PSM 7번 모드가 적용된 OCR 실행 함수]
+// 📸 [영문/한글 워커 분리 전용 고속 OCR 실행 함수]
 // ========================================================
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
@@ -2176,37 +2154,46 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = 'OCR 엔진을 초기화하고 있습니다...'
+    ocrProgressText.value = 'OCR 전용 엔진을 초기화하고 있습니다...'
     ocrDebugList.value = []
 
     const img = new Image()
     img.src = URL.createObjectURL(file)
     await img.decode()
 
-    const worker = await createWorker('kor+eng')
+    // 🌟 영문 전용 워커와 한글 전용 워커를 각각 독립적으로 생성하여 충돌 원천 방지
+    const engWorker = await createWorker('eng')
+    const korWorker = await createWorker('kor')
 
-    // 🌟 PSM 7번(단일 텍스트 라인 모드) 및 화이트리스트 동시 적용
-    await worker.setParameters({
-      tessedit_pageseg_mode: '7',
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789가-힣 '
+    await engWorker.setParameters({
+      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
+    })
+    await korWorker.setParameters({
+      tessedit_char_whitelist: '가나다라마바사아자차카타파하거너더러머버서어저처코토포호고노도로모보소오조초구누두루무부수우주추기니디리미비시이지치키티피히 '
     })
 
     let matchedCount = 0
 
     for (let i = 0; i < OCR_SLOTS.length; i++) {
       const slot = OCR_SLOTS[i]
-      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 분석 중...`
+      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 정밀 분석 중...`
 
-      const { dualUrl } = cropDualCardImages(img, slot)
-      if (!dualUrl) continue
+      const { badgeUrl, nameUrl } = cropSplitCardImages(img, slot)
+      if (!badgeUrl || !nameUrl) continue
 
-      const { data: { text } } = await worker.recognize(dualUrl)
-      const { player: matchedPlayer, name: foundName } = processCardSlot(text, slot.pos)
+      // 상단 배지는 영문 워커로 스캔
+      const { data: { text: badgeText } } = await engWorker.recognize(badgeUrl)
+      // 하단 이름은 한글 워커로 스캔
+      const { data: { text: nameText } } = await korWorker.recognize(nameUrl)
+
+      // 두 결과를 하나로 결합
+      const combinedText = `${badgeText} ${nameText}`
+      const { player: matchedPlayer, name: foundName } = processCardSlot(combinedText, slot.pos)
 
       ocrDebugList.value.push({
         slot: slot.pos,
-        imgUrl: dualUrl, 
-        rawText: text.trim().replace(/\n+/g, ' '),
+        imgUrl: nameUrl, 
+        rawText: `[배지] ${badgeText.trim()} / [이름] ${nameText.trim()}`,
         matchedName: foundName,
         matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
       })
@@ -2224,7 +2211,8 @@ const handleOcrUpload = async (event: Event) => {
       }
     }
 
-    await worker.terminate()
+    await engWorker.terminate()
+    await korWorker.terminate()
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
