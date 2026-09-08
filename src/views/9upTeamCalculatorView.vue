@@ -1995,54 +1995,70 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [분리 크롭 & 듀얼 머지] 상단 배지 영역과 하단 이름표 영역만 추출 후 세로로 결합
+// ========================================================
+// 📸 [정밀 고정 좌표계] 상단 배지 + 하단 이름표 듀얼 머지 크롭 엔진
+// ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   if (!ctx) return { dualUrl: null, nameUrl: null }
 
-  const boxX = Math.round(image.naturalWidth * slot.x)
-  const boxY = Math.round(image.naturalHeight * slot.y)
-  const boxW = Math.round(image.naturalWidth * slot.w)
-  const boxH = Math.round(image.naturalHeight * slot.h)
+  const imgW = image.naturalWidth
+  const imgH = image.naturalHeight
 
-  // 1. 상단 배지/연도 영역 (카드 상단 5% ~ 30%)
-  const badgeSy = boxY + Math.round(boxH * 0.05)
-  const badgeSh = Math.round(boxH * 0.25)
+  // 1. 해당 슬롯 카드 전체의 절대 픽셀 영역
+  const cardX = imgW * slot.x
+  const cardY = imgH * slot.y
+  const cardW = imgW * slot.w
+  const cardH = imgH * slot.h
 
-  // 2. 하단 이름표 영역 (카드 하단 75% ~ 97%)
-  const nameSy = boxY + Math.round(boxH * 0.75)
-  const nameSh = Math.round(boxH * 0.22)
+  // 2. 상단 배지/연도 영역 (카드 전체 높이 기준 상단 10% ~ 32 지점)
+  const topBadgeY = cardY + (cardH * 0.10)
+  const topBadgeH = cardH * 0.22
 
-  const targetW = Math.round(boxW * 3)
-  const badgeHScaled = Math.round(badgeSh * 3)
-  const nameHScaled = Math.round(nameSh * 3)
+  // 3. 하단 이름표 영역 (카드 전체 높이 기준 하단 76% ~ 96 지점)
+  const bottomNameY = cardY + (cardH * 0.76)
+  const bottomNameH = cardH * 0.20
 
-  // 두 영역을 위아래로 붙일 캔버스
-  canvas.width = targetW
-  canvas.height = badgeHScaled + nameHScaled + 15 // 여백 15px
+  const scale = 3 // 화질 선명도를 위한 3배 확대
+  const destW = Math.round(cardW * scale)
+  const topH_scaled = Math.round(topBadgeH * scale)
+  const botH_scaled = Math.round(bottomNameH * scale)
+
+  // 두 조각을 위아래로 합칠 통합 캔버스 생성
+  canvas.width = destW
+  canvas.height = topH_scaled + botH_scaled + 20 // 사이에 20px 여백
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
-  ctx.fillStyle = '#050505'
+  ctx.fillStyle = '#111111'
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단 배지 그리기
-  ctx.drawImage(image, boxX, badgeSy, boxW, badgeSh, 0, 0, targetW, badgeHScaled)
-  // 하단 이름표 그리기
-  ctx.drawImage(image, boxX, nameSy, boxW, nameSh, 0, badgeHScaled + 15, targetW, nameHScaled)
+  // 상단 배지(시즌/연도) 복사 붙여넣기
+  ctx.drawImage(
+    image, 
+    cardX, topBadgeY, cardW, topBadgeH, 
+    0, 0, destW, topH_scaled
+  )
 
-  // 디버그 인스펙터용 이름표 단독 이미지
+  // 하단 이름표 복사 붙여넣기 (상단 바로 아래에 이어붙이기)
+  ctx.drawImage(
+    image, 
+    cardX, bottomNameY, cardW, bottomNameH, 
+    0, topH_scaled + 20, destW, botH_scaled
+  )
+
+  // 디버그 인스펙터 화면에 띄울 '하단 이름표 단독 썸네일' 캔버스
   const nameCanvas = document.createElement('canvas')
   const nameCtx = nameCanvas.getContext('2d')
-  nameCanvas.width = targetW
-  nameCanvas.height = nameHScaled
+  nameCanvas.width = destW
+  nameCanvas.height = botH_scaled
   if (nameCtx) {
     nameCtx.imageSmoothingEnabled = true
     nameCtx.imageSmoothingQuality = 'high'
-    nameCtx.fillStyle = '#050505'
+    nameCtx.fillStyle = '#111111'
     nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
-    nameCtx.drawImage(image, boxX, nameSy, boxW, nameSh, 0, 0, targetW, nameHScaled)
+    nameCtx.drawImage(image, cardX, bottomNameY, cardW, bottomNameH, 0, 0, destW, botH_scaled)
   }
 
   return {
