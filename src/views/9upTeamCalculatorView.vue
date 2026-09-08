@@ -1914,7 +1914,7 @@ const selectSlot = (slot: string) => {
 }
 
 // ========================================================
-// 📸 [최종 완성] 이름 + 시즌/등급 정밀 OCR 및 자동 포지션 매칭 엔진
+// 📸 [4열 9타자 구조] 정밀 슬롯 좌표 & 이름+시즌 매칭 엔진
 // ========================================================
 const ocrFileInput = ref<HTMLInputElement | null>(null)
 const isOcrProcessing = ref(false)
@@ -1969,24 +1969,31 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// 9개 타자 슬롯 표준 좌표
+// 🌟 [4개 열 기반 9타자 정밀 좌표계] 투수(3열 중앙)와 감독(4열 좌측)을 제외한 9개 슬롯
 const OCR_SLOTS = [
-  { pos: 'LF',  x: 0.20, y: 0.10, w: 0.14, h: 0.35 },
-  { pos: 'CF',  x: 0.40, y: 0.10, w: 0.14, h: 0.35 },
-  { pos: 'RF',  x: 0.60, y: 0.10, w: 0.14, h: 0.35 },
-  { pos: 'SS',  x: 0.30, y: 0.24, w: 0.14, h: 0.35 },
-  { pos: '2B',  x: 0.50, y: 0.24, w: 0.14, h: 0.35 },
-  { pos: '3B',  x: 0.20, y: 0.37, w: 0.14, h: 0.35 },
-  { pos: '1B',  x: 0.60, y: 0.37, w: 0.14, h: 0.35 },
-  { pos: 'C',   x: 0.40, y: 0.66, w: 0.14, h: 0.33 },
-  { pos: 'DH',  x: 0.52, y: 0.66, w: 0.14, h: 0.33 }
+  // 1열 (외야): 좌 - 중 - 우
+  { pos: 'LF', x: 0.22, y: 0.11, w: 0.135, h: 0.28 },
+  { pos: 'CF', x: 0.42, y: 0.11, w: 0.135, h: 0.28 },
+  { pos: 'RF', x: 0.62, y: 0.11, w: 0.135, h: 0.28 },
+
+  // 2열 (키스톤): 유격 - 2루
+  { pos: 'SS', x: 0.32, y: 0.27, w: 0.135, h: 0.28 },
+  { pos: '2B', x: 0.52, y: 0.27, w: 0.135, h: 0.28 },
+
+  // 3열 (코너): 3루 - 1루 (중앙 선발투수 선동열은 스킵)
+  { pos: '3B', x: 0.22, y: 0.40, w: 0.135, h: 0.28 },
+  { pos: '1B', x: 0.62, y: 0.40, w: 0.135, h: 0.28 },
+
+  // 4열 (하단): 포수 - 지명타자 (좌측 감독 김응용은 스킵)
+  { pos: 'C',  x: 0.42, y: 0.68, w: 0.135, h: 0.28 },
+  { pos: 'DH', x: 0.53, y: 0.68, w: 0.135, h: 0.28 }
 ]
 
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 🌟 [안정성 강화] 뱃지가 잘리지 않도록 넉넉하게 카드 전체 영역을 고해상도 캡처
+// 2배 확대 무손실 크롭
 const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
@@ -2005,8 +2012,8 @@ const cropCardImage = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   return canvas.toDataURL('image/png')
 }
 
-// 🌟 [정밀 매칭] 이름 + 시즌/등급(HIT, TOP, DGN 등) + 연도를 조합해 DB에서 단 1장의 카드를 완벽 색출
-const findExactPlayerCard = (rawText: string): Raw | null => {
+// 🌟 [이름 + 시즌 정밀 매칭] 텍스트 인식 실패율을 낮춘 퍼지 매칭 적용
+const findExactPlayerCard = (rawText: string, targetPos: string): Raw | null => {
   const cleanText = rawText.replace(/\s+/g, '')
   const upperText = rawText.toUpperCase()
 
@@ -2019,41 +2026,42 @@ const findExactPlayerCard = (rawText: string): Raw | null => {
   else if (upperText.includes('GG')) detectedGrade = 'GG'
   else if (upperText.includes('MMVP') || upperText.includes('MVP')) detectedGrade = 'MMVP'
 
-  // 2. 연도 판별 (83, 99 등)
-  const yearMatch = rawText.match(/\b(8\d|9\d|0\d|1\d|2\d)\b/)
+  // 2. 연도 판별 (83, 99 등 - 강화레벨 15 등 엉뚱한 숫자 방지)
+  const yearMatch = rawText.match(/\b(8\d|9\d|0\d|2\d)\b/)
   const detectedYear = yearMatch ? yearMatch[1] : ''
 
-  // 3. 선수 이름 매칭
+  // 3. 이름 매칭 (1차: 정확 일치)
   let candidates = players.value.filter(p => {
     const pName = String(p.name || '').replace(/\s+/g, '')
     return pName.length >= 2 && cleanText.includes(pName)
   })
 
-  // 부분 일치 보조 매칭
+  // 3-1. 이름 매칭 (2차 보조: 2글자 이상 부분 일치 - 권/도/범 등 받침 오인식 대응)
   if (candidates.length === 0) {
-    const words = rawText.match(/[가-힣]{2,4}/g) || []
-    for (const w of words) {
-      const found = players.value.filter(p => String(p.name || '').replace(/\s+/g, '') === w)
-      if (found.length > 0) {
-        candidates = found
-        break
-      }
-    }
+    candidates = players.value.filter(p => {
+      const pName = String(p.name || '').replace(/\s+/g, '')
+      if (pName.length < 2) return false
+      return cleanText.includes(pName.slice(0, 2)) || cleanText.includes(pName.slice(-2))
+    })
   }
 
   if (candidates.length === 0) return null
 
-  // 4. 등급이 감지되었다면 우선 필터링
+  // 4. 감지된 등급 우선 필터링
   if (detectedGrade) {
     const gradeFiltered = candidates.filter(p => getMappedGrade(p.grade) === detectedGrade)
     if (gradeFiltered.length > 0) candidates = gradeFiltered
   }
 
-  // 5. 연도가 감지되었다면 우선 필터링
+  // 5. 감지된 연도 우선 필터링
   if (detectedYear) {
     const yearFiltered = candidates.filter(p => getArray(p.year).some(y => String(y).endsWith(detectedYear)))
     if (yearFiltered.length > 0) candidates = yearFiltered
   }
+
+  // 6. 해당 슬롯에 장착 가능한 카드 우선
+  const posFiltered = candidates.filter(p => isValidSlotForPlayer(p, targetPos))
+  if (posFiltered.length > 0) return posFiltered[0]
 
   return candidates[0] || null
 }
@@ -2075,36 +2083,28 @@ const handleOcrUpload = async (event: Event) => {
     const worker = await createWorker('kor+eng')
     let matchedCount = 0
 
+    // 9개 슬롯 1:1 확정 배치
     for (let i = 0; i < OCR_SLOTS.length; i++) {
       const slot = OCR_SLOTS[i]
-      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 카드 스캔 중...`
+      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 스캔 중...`
 
       const cardUrl = cropCardImage(img, slot)
       if (!cardUrl) continue
 
       const { data: { text } } = await worker.recognize(cardUrl)
-      const matchedPlayer = findExactPlayerCard(text)
+      const matchedPlayer = findExactPlayerCard(text, slot.pos)
 
       if (matchedPlayer) {
-        // 해당 선수의 고유 주포지션 또는 장착 가능한 슬롯 결정
-        const validPosList = getPlayerPositions(matchedPlayer)
-        let targetSlot = slot.pos
-
-        // 만약 해당 슬롯에 이 선수가 들어갈 수 없다면 갈 수 있는 빈자리나 DH로 배정
-        if (!isValidSlotForPlayer(matchedPlayer, targetSlot)) {
-          const possibleSlot = validPosList.find(s => !lineup.value[s]) || 'DH'
-          targetSlot = possibleSlot
-        }
-
-        // 중복 장착 제거
+        // 중복 등록 방지
         Object.keys(lineup.value).forEach(k => {
           if (lineup.value[k] && isSameCard(lineup.value[k]!, matchedPlayer)) {
             lineup.value[k] = null
           }
         })
 
-        lineup.value[targetSlot] = matchedPlayer
-        initPlayerBuff(targetSlot, matchedPlayer)
+        // 해당 슬롯에 직접 배치 (다른 슬롯으로 튀는 현상 원천 차단)
+        lineup.value[slot.pos] = matchedPlayer
+        initPlayerBuff(slot.pos, matchedPlayer)
         matchedCount++
       }
     }
@@ -2113,7 +2113,7 @@ const handleOcrUpload = async (event: Event) => {
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
-    showToast(`라인업 등록 완료: 총 ${matchedCount}명의 선수가 정확히 배치되었습니다!`, 'success')
+    showToast(`라인업 등록 완료: 총 ${matchedCount}명의 타자가 배치되었습니다!`, 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
@@ -2123,6 +2123,7 @@ const handleOcrUpload = async (event: Event) => {
     if (ocrFileInput.value) ocrFileInput.value.value = ''
   }
 }
+  
 const fileInput = ref<HTMLInputElement | null>(null)  
 
 // 🌟 라인업 초기화 (각인 장비는 무조건 유지!) 🌟
