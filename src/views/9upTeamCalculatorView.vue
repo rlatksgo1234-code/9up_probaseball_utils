@@ -3967,10 +3967,11 @@ const getPlayerImage = (p: Raw | null) => {
             </span>
           </div>
 
-          <!-- 실제 캡처된 크롭 이미지 -->
-          <div class="w-full h-24 bg-black rounded-lg border border-neutral-800 flex items-center justify-center overflow-hidden mb-1 p-0.5">
-            <img :src="item.imgUrl" class="w-full h-full object-contain" />
-          </div>
+          <!-- 실제 캡처된 크롭 이미지 (디버그 모달 안쪽) -->
+<div class="w-full h-24 bg-black rounded-lg border border-neutral-800 flex flex-col items-center justify-center overflow-hidden mb-1 p-0.5 gap-0.5">
+  <img :src="item.badgeImgUrl" class="w-full h-[48%] object-contain bg-neutral-900" title="배지 크롭" />
+  <img :src="item.nameImgUrl" class="w-full h-[48%] object-contain bg-neutral-900" title="이름 크롭" />
+</div>
           
           <!-- 확정된 카드 명 -->
           <div class="text-[11px] font-bold truncate w-full text-center" :class="item.matchedCard ? 'text-emerald-300' : 'text-rose-400'">
