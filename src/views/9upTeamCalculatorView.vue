@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [배지 + 이름표 완벽 듀얼 머지 크롭 & 디버그 통합 렌더링]
+// 📸 [정밀 핀포인트 듀얼 머지 크롭] 배지 밸런스 + 이름표 우측/하단 노이즈 컷
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,17 +2020,17 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 등급 배지 영역 (카드 좌측 중간: x는 12%~55%, y는 33%~52%)
+  // 🌟 1. 등급 배지 영역 (위쪽 빈 공간 축소, 아래쪽 잘림 방지를 위해 Y축과 높이 미세 조정)
   const badgeX = cardX + (cardW * 0.12)
-  const badgeY = cardY + (cardH * 0.33)
-  const badgeW = cardW * 0.43
-  const badgeH = cardH * 0.19
+  const badgeY = cardY + (cardH * 0.35) // 시작점을 살짝 아래로 내려 윗여백 축소
+  const badgeW = cardW * 0.45
+  const badgeH = cardH * 0.21 // 배지 하단이 잘리지 않도록 높이 확보
 
-  // 🌟 2. 하단 이름표 영역 (카드 하단 중앙: x는 10%~90%, y는 74%~98%)
-  const nameX = cardX + (cardW * 0.10)
-  const nameY = cardY + (cardH * 0.74)
-  const nameW = cardW * 0.80
-  const nameH = cardH * 0.24
+  // 🌟 2. 하단 이름표 영역 (우측 폭을 줄여 옆 카드 침범 방지, 하단 Y축을 줄여 아래쪽 노이즈 컷)
+  const nameX = cardX + (cardW * 0.12) // 좌측 시작점
+  const nameY = cardY + (cardH * 0.76) // 이름표 상단 위치
+  const nameW = cardW * 0.68 // 🌟 우측 폭을 기존 0.80에서 0.68로 줄여서 옆 카드 일러스트 제거
+  const nameH = cardH * 0.18 // 🌟 하단 높이를 줄여서 이름 바 아래쪽 불필요한 이미지 컷트
 
   const scale = 3
   const badgeW_scaled = Math.round(badgeW * scale)
