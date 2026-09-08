@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [정밀 타이트 크롭 & 이진화 전처리 엔진]
+// 📸 [정밀 패딩 & 부드러운 이진화 전처리 크롭 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,41 +2020,52 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 🌟 1. 상단 배지 영역: 위쪽 불필요한 여백을 더 자르고 배지만 타이트하게 타겟팅
+  // 1. 상단 배지 영역
   const badgeX = cardX + (cardW * 0.15)
-  const badgeY = cardY + (cardH * 0.38) // Y를 더 내려서 위쪽 빈 공간 대폭 축소
+  const badgeY = cardY + (cardH * 0.38)
   const badgeW = cardW * 0.40
-  const badgeH = cardH * 0.16 // 높이를 타이트하게 조여서 배지만 집중 캡처
+  const badgeH = cardH * 0.16
 
-  // 🌟 2. 하단 이름표 영역: 우측 폭을 줄여 옆 카드 침범 방지, 하단 노이즈 컷
+  // 2. 하단 이름표 영역
   const nameX = cardX + (cardW * 0.12)
   const nameY = cardY + (cardH * 0.75)
-  const nameW = cardW * 0.65 // 우측 폭을 더 좁혀서 옆 일러스트 완벽 차단
-  const nameH = cardH * 0.15 // 하단 높이를 줄여서 아래쪽 잔여 노이즈 컷트
+  const nameW = cardW * 0.65
+  const nameH = cardH * 0.15
 
   const scale = 3
   const badgeW_scaled = Math.round(badgeW * scale)
   const badgeH_scaled = Math.round(badgeH * scale)
   const nameW_scaled = Math.round(nameW * scale)
   const nameH_scaled = Math.round(nameH * scale)
-  const destW = Math.max(badgeW_scaled, nameW_scaled)
+  
+  const padding = 12 // 🌟 테두리 획 잘림 방지를 위한 사방 여백(패딩)
+  const destW = Math.max(badgeW_scaled, nameW_scaled) + (padding * 2)
 
   canvas.width = destW
-  canvas.height = badgeH_scaled + nameH_scaled + 15 // 사이 여백 15px
+  canvas.height = badgeH_scaled + nameH_scaled + (padding * 3)
 
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
   ctx.fillStyle = '#000000' // 완전한 검은색 배경
   ctx.fillRect(0, 0, canvas.width, canvas.height)
 
-  // 상단에 등급 배지 그리기
-  ctx.drawImage(image, badgeX, badgeY, badgeW, badgeH, Math.round((destW - badgeW_scaled) / 2), 0, badgeW_scaled, badgeH_scaled)
+  // 상단에 등급 배지 그리기 (패딩 적용)
+  ctx.drawImage(
+    image, badgeX, badgeY, badgeW, badgeH, 
+    padding + Math.round((destW - badgeW_scaled - (padding * 2)) / 2), 
+    padding, 
+    badgeW_scaled, badgeH_scaled
+  )
   
-  // 하단에 이름표 그리기
-  ctx.drawImage(image, nameX, nameY, nameW, nameH, Math.round((destW - nameW_scaled) / 2), badgeH_scaled + 15, nameW_scaled, nameH_scaled)
+  // 하단에 이름표 그리기 (패딩 적용)
+  ctx.drawImage(
+    image, nameX, nameY, nameW, nameH, 
+    padding + Math.round((destW - nameW_scaled - (padding * 2)) / 2), 
+    badgeH_scaled + (padding * 2), 
+    nameW_scaled, nameH_scaled
+  )
 
-  // 🌟 3. [이진화 및 흑백 대비 극대화 전처리]
-  // 배경 그라데이션 노이즈를 날리고 흰색 글자만 쨍하게 살려 OCR 인식률 극대화
+  // 3. [부드러운 이진화 및 흑백 대비 전처리]
   const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height)
   const data = imgData.data
   for (let i = 0; i < data.length; i += 4) {
@@ -2062,11 +2073,10 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     const g = data[i+1]
     const b = data[i+2]
     
-    // 그레이스케일(흑백) 변환
     let v = 0.299 * r + 0.587 * g + 0.114 * b
     
-    // 대비(Contrast) 강제 스트레칭: 어두운 배경은 더 시커맣게, 흰 글자는 더 하얗게 튜닝
-    v = v < 130 ? v * 0.3 : Math.min(255, v * 1.8 + 40)
+    // 🌟 획 끊김 현상을 방지하기 위해 대비 조작 강도를 부드럽게 완화
+    v = v < 110 ? v * 0.5 : Math.min(255, v * 1.3 + 25)
 
     data[i]   = v
     data[i+1] = v
