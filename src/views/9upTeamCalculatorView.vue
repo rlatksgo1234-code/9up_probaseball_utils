@@ -2005,7 +2005,7 @@ const triggerOcrInput = () => {
 }
 
 // ========================================================
-// 📸 [정밀 패딩 & 상·하단 분리 크롭 엔진]
+// 📸 [정밀 좌표 조율 & 부드러운 그레이스케일 전처리 엔진]
 // ========================================================
 const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const canvas = document.createElement('canvas')
@@ -2020,15 +2020,15 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 1. 상단 배지 영역
+  // 🌟 1. 상단 배지 영역: Y축을 살짝 내려서(0.40) 윗 여백 축소
   const badgeX = cardX + (cardW * 0.15)
-  const badgeY = cardY + (cardH * 0.38)
+  const badgeY = cardY + (cardH * 0.40)
   const badgeW = cardW * 0.40
   const badgeH = cardH * 0.16
 
-  // 2. 하단 이름표 영역
+  // 🌟 2. 하단 이름표 영역: Y축을 살짝 올려서(0.73) 위쪽 여유 확보 및 하단 컷
   const nameX = cardX + (cardW * 0.12)
-  const nameY = cardY + (cardH * 0.75)
+  const nameY = cardY + (cardH * 0.73)
   const nameW = cardW * 0.65
   const nameH = cardH * 0.15
 
@@ -2040,7 +2040,27 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
   
   const padding = 12
 
-  // 🌟 [배지 전용 단독 캔버스] (영어/숫자 전용 OCR용)
+  // 🌟 [부드러운 그레이스케일 및 대비 강화 함수 (획 유실 방지)]
+  const applySoftPreprocessing = (context: CanvasRenderingContext2D, w: number, h: number) => {
+    const imgData = context.getImageData(0, 0, w, h)
+    const data = imgData.data
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i]
+      const g = data[i+1]
+      const b = data[i+2]
+      let v = 0.299 * r + 0.587 * g + 0.114 * b
+      
+      // 획이 깎이지 않도록 부드러운 콘트라스트 조절 (중간톤 기준 대비 강화)
+      v = Math.min(255, Math.max(0, (v - 128) * 1.25 + 128))
+
+      data[i]   = v
+      data[i+1] = v
+      data[i+2] = v
+    }
+    context.putImageData(imgData, 0, 0)
+  }
+
+  // 배지 전용 단독 캔버스
   const badgeCanvas = document.createElement('canvas')
   const badgeCtx = badgeCanvas.getContext('2d')
   badgeCanvas.width = badgeW_scaled + (padding * 2)
@@ -2049,10 +2069,11 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     badgeCtx.fillStyle = '#000000'
     badgeCtx.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height)
     badgeCtx.drawImage(image, badgeX, badgeY, badgeW, badgeH, padding, padding, badgeW_scaled, badgeH_scaled)
+    applySoftPreprocessing(badgeCtx, badgeCanvas.width, badgeCanvas.height)
   }
   const badgeUrl = badgeCanvas.toDataURL('image/png')
 
-  // 🌟 [이름표 전용 단독 캔버스] (한글 전용 OCR용)
+  // 이름표 전용 단독 캔버스
   const nameCanvas = document.createElement('canvas')
   const nameCtx = nameCanvas.getContext('2d')
   nameCanvas.width = nameW_scaled + (padding * 2)
@@ -2061,10 +2082,11 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     nameCtx.fillStyle = '#000000'
     nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
     nameCtx.drawImage(image, nameX, nameY, nameW, nameH, padding, padding, nameW_scaled, nameH_scaled)
+    applySoftPreprocessing(nameCtx, nameCanvas.width, nameCanvas.height)
   }
   const nameUrl = nameCanvas.toDataURL('image/png')
 
-  // 🌟 [디버그용 통합 캔버스] (화면 하단 서랍장에 보여줄 용도 - 이진화 없이 원본 화질 유지)
+  // 디버그용 통합 캔버스
   const destW = Math.max(badgeW_scaled, nameW_scaled) + (padding * 2)
   canvas.width = destW
   canvas.height = badgeH_scaled + nameH_scaled + (padding * 3)
@@ -2087,6 +2109,7 @@ const cropDualCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) 
     badgeH_scaled + (padding * 2), 
     nameW_scaled, nameH_scaled
   )
+  applySoftPreprocessing(ctx, canvas.width, canvas.height)
 
   return {
     dualUrl: canvas.toDataURL('image/png'),
