@@ -2004,9 +2004,6 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// ========================================================
-// 📸 [상단 배지 / 하단 이름표 독립 분리 크롭 엔진]
-// ========================================================
 const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
   const imgW = image.naturalWidth
   const imgH = image.naturalHeight
@@ -2016,16 +2013,18 @@ const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0])
   const cardW = imgW * slot.w
   const cardH = imgH * slot.h
 
-  // 1. 상단 배지 영역 (영어/숫자 전용 크롭)
-  const badgeX = cardX + (cardW * 0.14)
-  const badgeY = cardY + (cardH * 0.40)
-  const badgeW = cardW * 0.32
-  const badgeH = cardH * 0.16
+  // 1. 상단 배지 영역 (HIT, TOP, DGN 등 영문/숫자 전용)
+  // 카드 좌측 중앙에 위치한 뱃지만 타겟팅
+  const badgeX = cardX + (cardW * 0.05)
+  const badgeY = cardY + (cardH * 0.38)
+  const badgeW = cardW * 0.45
+  const badgeH = cardH * 0.20
 
-  // 2. 하단 이름표 영역 (한글 전용 크롭)
-  const nameX = cardX + (cardW * 0.12)
-  const nameY = cardY + (cardH * 0.73)
-  const nameW = cardW * 0.65
+  // 2. 하단 이름표 영역 (선수 이름 전용)
+  // 0.73 -> 0.82로 대폭 내려서 불필요한 파워 스탯 숫자 배제
+  const nameX = cardX + (cardW * 0.15)
+  const nameY = cardY + (cardH * 0.82) 
+  const nameW = cardW * 0.70
   const nameH = cardH * 0.15
 
   const scale = 3
@@ -2167,9 +2166,6 @@ const handleOcrUpload = async (event: Event) => {
 
     await engWorker.setParameters({
       tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
-    })
-    await korWorker.setParameters({
-      tessedit_char_whitelist: '가나다라마바사아자차카타파하거너더러머버서어저처코토포호고노도로모보소오조초구누두루무부수우주추기니디리미비시이지치키티피히 '
     })
 
     let matchedCount = 0
