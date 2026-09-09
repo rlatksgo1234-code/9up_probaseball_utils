@@ -1984,23 +1984,25 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 📸 [동적 크롭 엔진] 배지 좌표를 이정표 삼아, 우측과 하단으로 넓고 넉넉하게 잘라냅니다.
+// 📸 [동적 크롭 엔진] 배지 높이(bh)를 절대 척도로 삼아 노이즈(별, 스탯)를 건너뛰고 이름표만 타격
 const cropDynamicCardParts = (image: HTMLImageElement, badgeBbox: any) => {
-  // 스크린샷 전체 너비의 약 18%를 카드 한 장의 너비로 넉넉하게 잡음 (비율이 달라도 안전)
-  const estimatedCardW = image.naturalWidth * 0.18;
-  const estimatedCardH = image.naturalHeight * 0.25;
+  // 엔진이 찾아낸 배지 텍스트의 실제 높이와 너비
+  const bh = badgeBbox.y1 - badgeBbox.y0; 
+  const bw = badgeBbox.x1 - badgeBbox.x0;
 
-  // 1. 배지 영역 ('HIT' 옆의 '83' 시즌 숫자까지 포획하기 위해 가로로 길게 확장)
+  // 1. 상단 배지 크롭: 오른쪽으로 넓게 확장하여 'HIT 83', 'TOP'의 시즌 숫자까지 완벽 포획
+  // 높이는 타이트하게 유지해서 그 밑에 있는 별(★)을 잘라냄
   const badgeX = Math.max(0, badgeBbox.x0 - 5);
   const badgeY = Math.max(0, badgeBbox.y0 - 5);
-  const badgeW = estimatedCardW * 0.55; // 텍스트 껍데기를 무시하고 강제로 넓게 잡음
-  const badgeH = (badgeBbox.y1 - badgeBbox.y0) + 12; // 별(★) 인식을 피하기 위해 높이는 타이트하게 유지
+  const badgeW = Math.max(bw * 1.5, bh * 6); // 최소 글자 높이의 6배 너비 보장
+  const badgeH = bh + 12; 
 
-  // 2. 이름표 영역 (배지 기준 밑으로 내리고, 선수 이름 3~4글자가 다 담기도록 좌우로 넓게)
-  const nameX = Math.max(0, badgeBbox.x0 - (estimatedCardW * 0.2));
-  const nameY = badgeBbox.y1 + (estimatedCardH * 0.12); // 배지 끝에서 살짝 아래로
-  const nameW = estimatedCardW * 0.8;
-  const nameH = estimatedCardH * 0.15;
+  // 2. 하단 이름표 크롭 (이단 점프): 배지 위치에서 아래로 배지 높이의 7.5배만큼 점프
+  // 너비와 높이를 무식할 정도로 크고 넉넉하게 잡아서 이름이 무조건 들어오게 함
+  const nameX = Math.max(0, badgeBbox.x0 - (bh * 2));
+  const nameY = Math.min(image.naturalHeight - bh, badgeBbox.y0 + (bh * 7.5));
+  const nameW = bh * 10; 
+  const nameH = bh * 3.5; 
 
   const scale = 3;
   const padding = 8;
@@ -2118,7 +2120,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
   return { player: bestCard, name: matchedName }
 }
 
-// 📸 [OCR 실행 엔진] 4행 3열 그룹화 및 완벽한 다이아몬드 스캔
+// 📸 [OCR 실행 엔진] 4행 3열 그룹화, 가짜 배지 필터링(이중 검증), 완벽한 다이아몬드 스캔
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2126,7 +2128,7 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = '전체 이미지 스캔 및 4x3 다이아몬드 격자 분석 중...'
+    ocrProgressText.value = '이미지 전체 1차 스캔 (용의자 색출 중)...'
     ocrDebugList.value = []
 
     const img = new Image()
@@ -2136,71 +2138,110 @@ const handleOcrUpload = async (event: Event) => {
     const engWorker = await createWorker('eng')
     const korWorker = await createWorker('kor')
 
-    // 영문 워커는 화이트리스트 유지, 한글 워커(korWorker)는 화이트리스트 아예 삭제!
+    // 영문 워커는 등급과 숫자만 읽도록 화이트리스트 유지, 한글 워커는 완전 해방(받침 인식)
     await engWorker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' })
 
-    // 1. 이미지 전체를 가볍게 스캔하여 배지 위치 찾기
+    // 1. 전체 화면을 가볍게 스캔하여 영문 텍스트 긁어오기
     const { data: { words } } = await engWorker.recognize(img)
 
-    // 2. 등급 배지로 추정되는 텍스트만 깐깐하게 필터링 (알파벳만 추출해서 검사)
+    // 2. 지정된 배지 문자열이 포함된 '용의자'들만 추려내기
     const validGrades = ['HIT', 'TOP', 'DGN', 'ACE', 'GG', 'MMVP', 'ROY', 'TEA', 'SEA', 'POS', 'ASG', 'NT']
-    const badges = words.filter(w => {
+    const potentialBadges = words.filter(w => {
        const cleanText = w.text.replace(/[^a-zA-Z]/g, '').toUpperCase()
        return validGrades.some(g => cleanText.includes(g))
     })
 
-    if (badges.length === 0) {
-      showToast('화면에서 등급 배지를 찾을 수 없습니다. 다시 캡처해주세요.', 'error')
+    const validCards = [];
+
+    // 3. 이중 검증 (용의자의 아래쪽 이름표를 잘라 DB에 존재하는 이름인지 확인)
+    for (const badge of potentialBadges) {
+        ocrProgressText.value = `[${badge.text}] 위치 이중 검증 중...`
+        
+        const { badgeUrl, nameUrl } = cropDynamicCardParts(img, badge.bbox);
+        if (!nameUrl) continue;
+
+        const { data: { text: nameText } } = await korWorker.recognize(nameUrl);
+        const cleanNameText = nameText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '');
+
+        let matchedName = null;
+        for (const p of players.value) {
+            const pName = String(p.name || '').trim();
+            if (pName.length >= 2 && cleanNameText.includes(pName)) {
+                matchedName = pName; break;
+            }
+        }
+        
+        if (!matchedName) {
+            // 이름이 살짝 뭉개진 경우 1, 3번째 글자만 일치해도 통과 (예: 김*모)
+            for (const p of players.value) {
+                const pName = String(p.name || '').trim();
+                if (pName.length === 3 && cleanNameText.includes(pName[0]) && cleanNameText.includes(pName[2])) {
+                    matchedName = pName; break;
+                }
+            }
+        }
+
+        // 이름이 DB와 일치하는 경우에만 "진짜 카드"로 인정 ("TEAM POWER"는 여기서 자동 탈락)
+        if (matchedName) {
+            validCards.push({ bbox: badge.bbox, badgeUrl, nameUrl, matchedName, nameText });
+        }
+    }
+
+    if (validCards.length === 0) {
+      showToast('화면에서 유효한 선수 카드를 찾을 수 없습니다.', 'error')
       return
     }
 
-    // 3. 배지들의 Y 좌표를 기준으로 4개의 행(Row)으로 완벽하게 그룹화 (Clustering)
-    const rows: Array<any[]> = []
-    const Y_TOLERANCE = img.naturalHeight * 0.1 // 화면 높이의 약 10% 오차 범위 내면 같은 줄로 인정
+    ocrProgressText.value = '검증 완료! 4행 다이아몬드 배열로 정렬 중...'
 
-    // 위에서부터 아래로 순서대로 정렬
-    badges.sort((a, b) => a.bbox.y0 - b.bbox.y0)
+    // 4. 진짜 카드들을 Y좌표(높이) 순으로 정렬 후 4개의 줄(Row)로 묶음
+    validCards.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+    const rows: Array<any[]> = [];
+    
+    // 배지 평균 높이의 3배 정도를 오차 허용 범위(같은 줄)로 설정
+    const avgBh = validCards.reduce((sum, c) => sum + (c.bbox.y1 - c.bbox.y0), 0) / validCards.length;
+    const Y_TOLERANCE = avgBh * 3; 
 
-    for (const badge of badges) {
+    for (const card of validCards) {
        let added = false
        for (const row of rows) {
-          const rowAvgY = row.reduce((sum, b) => sum + b.bbox.y0, 0) / row.length
-          if (Math.abs(badge.bbox.y0 - rowAvgY) < Y_TOLERANCE) {
-             row.push(badge)
+          const rowAvgY = row.reduce((sum, c) => sum + c.bbox.y0, 0) / row.length
+          if (Math.abs(card.bbox.y0 - rowAvgY) < Y_TOLERANCE) {
+             row.push(card)
              added = true
              break
           }
        }
-       if (!added) rows.push([badge])
+       if (!added) rows.push([card])
     }
 
-    // X축 상대 위치 계산을 위해 발견된 다이아몬드 전체의 가로 길이 측정
-    const minX = Math.min(...badges.map(b => b.bbox.x0))
-    const maxX = Math.max(...badges.map(b => b.bbox.x1))
+    // X축(좌우) 상대 위치 판단을 위한 다이아몬드 너비 계산
+    const minX = Math.min(...validCards.map(c => c.bbox.x0))
+    const maxX = Math.max(...validCards.map(c => c.bbox.x1))
     const diamondW = (maxX - minX) || 1
 
-    let matchedCount = 0
+    let matchedCount = 0;
 
-    // 4. 각 줄(Row)을 순회하며 상대 X 좌표에 따라 핀포인트로 포지션 꽂아넣기
+    // 5. 각 행(Row)별로 X좌표 위치를 따져 슬롯(포지션) 최종 할당
     for (let rowIndex = 0; rowIndex < Math.min(rows.length, 4); rowIndex++) {
        const row = rows[rowIndex]
-
-       for (const badge of row) {
-          const relX = (badge.bbox.x0 - minX) / diamondW
+       
+       for (const card of row) {
+          const relX = (card.bbox.x0 - minX) / diamondW
           let slot = ''
 
-          if (rowIndex === 0) { // 1번째 줄: LF(좌), CF(중), RF(우)
+          if (rowIndex === 0) { // 1번째 꼭대기: LF, CF, RF
              if (relX < 0.35) slot = 'LF'
              else if (relX < 0.65) slot = 'CF'
              else slot = 'RF'
-          } else if (rowIndex === 1) { // 2번째 줄: SS(좌), 2B(우)
+          } else if (rowIndex === 1) { // 2번째 꼭대기: SS, 2B
              if (relX < 0.5) slot = 'SS'
              else slot = '2B'
-          } else if (rowIndex === 2) { // 3번째 줄: 3B(좌), SP(중), 1B(우)
+          } else if (rowIndex === 2) { // 3번째 꼭대기: 3B, SP, 1B
              if (relX < 0.35) slot = '3B'
              else if (relX < 0.65) slot = 'SP'
              else slot = '1B'
-          } else if (rowIndex === 3) { // 4번째 줄: MGR(좌), C(중), DH(우)
+          } else if (rowIndex === 3) { // 4번째 꼭대기: MGR(무시), C, DH
              if (relX < 0.35) slot = 'MGR'
              else if (relX < 0.65) slot = 'C'
              else slot = 'DH'
@@ -2208,25 +2249,19 @@ const handleOcrUpload = async (event: Event) => {
 
           if (!slot || slot === 'MGR') continue
 
-          ocrProgressText.value = `[${slot}] 카드 이름 분석 중...`
-
-          // 5. 넉넉하고 넓어진 크롭 함수로 배지와 이름표 추출
-          const { badgeUrl, nameUrl } = cropDynamicCardParts(img, badge.bbox)
-          if (!nameUrl || !badgeUrl) continue
-
-          // 6. 이름표 한글 OCR 스캔
-          const { data: { text: nameText } } = await korWorker.recognize(nameUrl)
-          const { data: { text: badgeFullText } } = await engWorker.recognize(badgeUrl)
+          // 6. 정확하게 크롭된 배지 이미지를 다시 읽어 시즌 숫자(83, 24 등) 확보
+          const { data: { text: badgeFullText } } = await engWorker.recognize(card.badgeUrl)
           
-          const combinedText = `${badgeFullText} ${nameText}`
-          const { player: matchedPlayer, name: foundName } = processCardSlot(combinedText, slot)
+          const combinedText = `${badgeFullText} ${card.matchedName}`
+          const { player: matchedPlayer } = processCardSlot(combinedText, slot)
 
+          // 하단 디버그 창에 결과 출력
           ocrDebugList.value.push({
             slot: slot,
-            badgeImgUrl: badgeUrl,
-            nameImgUrl: nameUrl,
-            rawText: `[배지] ${badgeFullText.trim()} / [이름] ${nameText.trim()}`,
-            matchedName: foundName,
+            badgeImgUrl: card.badgeUrl,
+            nameImgUrl: card.nameUrl,
+            rawText: `[배지] ${badgeFullText.trim()} / [이름] ${card.nameText.trim()}`,
+            matchedName: card.matchedName,
             matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
           })
 
@@ -2248,7 +2283,7 @@ const handleOcrUpload = async (event: Event) => {
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
-    showToast(`라인업 스캔 완료: 총 ${matchedCount}명이 배치되었습니다!`, 'success')
+    showToast(`라인업 스캔 완료: 총 ${matchedCount}명이 성공적으로 배치되었습니다!`, 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
