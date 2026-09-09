@@ -1984,50 +1984,41 @@ const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 📸 [동적 크롭 엔진] 스탯 숫자는 버리고 이름표 중앙을 완벽하게 캡처하도록 수치 미세조정
-const cropDynamicCardParts = (image: HTMLImageElement, badgeBbox: any, rulerY: number) => {
-  
-  // 1. 상단 배지 크롭: 우측으로 길게 확장하여 시즌 숫자(83, 24 등) 확보
-  const badgeX = Math.max(0, badgeBbox.x0 - 5);
-  const badgeY = Math.max(0, badgeBbox.y0 - 5);
-  const badgeW = Math.max((badgeBbox.x1 - badgeBbox.x0) * 1.5, rulerY * 1.2); 
-  const badgeH = (badgeBbox.y1 - badgeBbox.y0) + 12;
+// 📸 [동적 크롭 엔진 - 역추적] 이름표 좌표를 기준으로 위로 0.65배 점프하여 배지만 정밀 타격
+const cropBadgeFromNameplate = (image: HTMLImageElement, nameBbox: any, rulerY: number) => {
+  // 1. 상단 배지 크롭 (위로 역주행): 이름표 상단(y0)에서 rulerY의 0.65배만큼 위로 올라갑니다.
+  const badgeY = Math.max(0, nameBbox.y0 - (rulerY * 0.65));
+  const badgeH = rulerY * 0.40; // 배지 글자가 충분히 담길 높이 확보
 
-  // 2. 하단 이름표 크롭: 시작점을 더 깊게 내려서(0.53배) 위의 파워 숫자를 피합니다.
-  // 높이(0.40배)를 넉넉하게 줘서 이름표 글자 밑동이 잘리지 않게 방어합니다.
-  const nameX = Math.max(0, badgeBbox.x0 - (rulerY * 0.6));
-  const nameY = badgeBbox.y0 + (rulerY * 0.53); // ✨ 수정됨: 0.45 -> 0.53 (더 아래부터 자름)
-  const nameW = rulerY * 2.0; 
-  const nameH = rulerY * 0.40; // ✨ 수정됨: 0.35 -> 0.40 (위아래로 더 길게)
+  // 배지는 이름표보다 좌우로 더 길 수 있으므로 폭을 양옆으로 넉넉하게 확장
+  const nameW = nameBbox.x1 - nameBbox.x0;
+  const badgeX = Math.max(0, nameBbox.x0 - (rulerY * 0.3));
+  const badgeW = nameW + (rulerY * 0.8);
+
+  // 2. 디버그 창에 보여줄 이름표 영역 (엔진이 잡은 좌표 그대로 여유만 줘서 크롭)
+  const nameY = nameBbox.y0 - 5;
+  const nameH = (nameBbox.y1 - nameBbox.y0) + 10;
+  const nameX = nameBbox.x0 - 5;
+  const expectedNameW = nameW + 10;
 
   const scale = 3;
   const padding = 8;
 
-  // --- 상단 배지 캔버스 ---
-  const badgeCanvas = document.createElement('canvas');
-  const badgeCtx = badgeCanvas.getContext('2d');
-  if (badgeCtx) {
-      badgeCanvas.width = Math.round(badgeW * scale) + (padding * 2);
-      badgeCanvas.height = Math.round(badgeH * scale) + (padding * 2);
-      badgeCtx.fillStyle = '#000000';
-      badgeCtx.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height);
-      badgeCtx.drawImage(image, badgeX, badgeY, badgeW, badgeH, padding, padding, badgeCanvas.width - (padding * 2), badgeCanvas.height - (padding * 2));
-  }
-
-  // --- 하단 이름표 캔버스 ---
-  const nameCanvas = document.createElement('canvas');
-  const nameCtx = nameCanvas.getContext('2d');
-  if (nameCtx) {
-      nameCanvas.width = Math.round(nameW * scale) + (padding * 2);
-      nameCanvas.height = Math.round(nameH * scale) + (padding * 2);
-      nameCtx.fillStyle = '#000000';
-      nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height);
-      nameCtx.drawImage(image, nameX, nameY, nameW, nameH, padding, padding, nameCanvas.width - (padding * 2), nameCanvas.height - (padding * 2));
+  const createCrop = (x: number, y: number, w: number, h: number) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      canvas.width = Math.round(w * scale) + (padding * 2);
+      canvas.height = Math.round(h * scale) + (padding * 2);
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(image, x, y, w, h, padding, padding, canvas.width - (padding * 2), canvas.height - (padding * 2));
+      return canvas.toDataURL('image/png');
   }
 
   return {
-      badgeUrl: badgeCanvas ? badgeCanvas.toDataURL('image/png') : null,
-      nameUrl: nameCanvas ? nameCanvas.toDataURL('image/png') : null
+      badgeUrl: createCrop(badgeX, badgeY, badgeW, badgeH),
+      nameUrl: createCrop(nameX, nameY, expectedNameW, nameH)
   };
 }
   
@@ -2116,7 +2107,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
   return { player: bestCard, name: matchedName }
 }
 
-// 📸 [OCR 실행 엔진] 무지성 그물망 전법, 한글 DB 이중 검증, 누락 방지 절대 격자(rowTier) 할당
+// 📸 [OCR 실행 엔진 - 바텀업] 한글 이름표 전수조사 -> 노이즈 자동 필터링 -> 다이아몬드 정렬 -> 배지 역탐색
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2124,7 +2115,7 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = '화면 내 모든 텍스트 스캔 중 (그물망 투망)...'
+    ocrProgressText.value = '1차 스캔: 화면 내 모든 한글 이름표 색출 중...'
     ocrDebugList.value = []
 
     const img = new Image()
@@ -2136,128 +2127,119 @@ const handleOcrUpload = async (event: Event) => {
 
     await engWorker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' })
 
-    // 1. 화면 내의 '모든' 영문/숫자 텍스트를 모조리 긁어옵니다. (영문 배지 필터링 전면 폐지)
-    const { data: { words } } = await engWorker.recognize(img)
-    const allTextBlocks = words.filter(w => w.text.trim().length >= 2)
+    // 1. 화면 전체를 한글로 스캔 (가장 선명하고 확실한 앵커 탐색)
+    const { data: { words: korWords } } = await korWorker.recognize(img)
+    const allKorBlocks = korWords.filter(w => w.text.trim().length >= 2)
 
-    if (allTextBlocks.length === 0) {
+    if (allKorBlocks.length === 0) {
       showToast('텍스트를 찾을 수 없습니다.', 'error')
       return
     }
 
-    // 2. 절대 자(RulerY) 계산을 위해 대략적인 위치 그룹화 (이건 자(Ruler)만 만들기 위한 용도)
-    const yGroups: Array<any[]> = [];
-    const Y_TOLERANCE = img.naturalHeight * 0.12; 
-    const sortedForRuler = [...allTextBlocks].sort((a, b) => a.bbox.y0 - b.bbox.y0);
-    for (const block of sortedForRuler) {
-       let added = false
-       for (const group of yGroups) {
-          const groupAvgY = group.reduce((sum, b) => sum + b.bbox.y0, 0) / group.length
-          if (Math.abs(block.bbox.y0 - groupAvgY) < Y_TOLERANCE) { group.push(block); added = true; break; }
-       }
-       if (!added) yGroups.push([block])
-    }
+    // 2. 찾아낸 텍스트를 선수 DB와 대조하여 '진짜 이름표'만 걸러내기 (마스터리, TEAM POWER 원천 차단)
+    const validNameplates: any[] = [];
+    for (const block of allKorBlocks) {
+        const cleanText = block.text.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
+        let matchedName = null;
 
-    let rulerY = img.naturalHeight * 0.16; // 기본값
-    if (yGroups.length >= 2) {
-        const avgY0 = yGroups[0].reduce((sum, b) => sum + b.bbox.y0, 0) / yGroups[0].length;
-        const avgY1 = yGroups[1].reduce((sum, b) => sum + b.bbox.y0, 0) / yGroups[1].length;
-        rulerY = Math.abs(avgY1 - avgY0);
-    }
-    if (rulerY < img.naturalHeight * 0.05 || rulerY > img.naturalHeight * 0.3) rulerY = img.naturalHeight * 0.16;
-
-    ocrProgressText.value = '진실의 방: 텍스트 하단 이름표 DB 검증 중...'
-    const validCards: any[] = [];
-
-    // 3. ✨ [무지성 강하 및 이름 검문] 찾아낸 모든 텍스트에서 뛰어내려 이름표를 확인합니다.
-    for (const textBlock of allTextBlocks) {
-        // Tesseract가 HIT와 83을 따로 잡았을 경우 중복 처리를 막는 방어 로직
-        const isDuplicate = validCards.some(c => Math.abs(c.bbox.x0 - textBlock.bbox.x0) < rulerY * 0.5 && Math.abs(c.bbox.y0 - textBlock.bbox.y0) < rulerY * 0.5);
-        if (isDuplicate) continue;
-
-        const { badgeUrl, nameUrl } = cropDynamicCardParts(img, textBlock.bbox, rulerY)
-        if (!nameUrl || !badgeUrl) continue
-
-        const { data: { text: nameText } } = await korWorker.recognize(nameUrl)
-        const cleanNameText = nameText.replace(/[\s\d'’\[\]\(\)\-\.]/g, '')
-        
-        let matchedName = null
         for (const p of players.value) {
           const pName = String(p.name || '').trim()
-          // 깐깐한 검증: DB의 이름이 크롭된 텍스트 안에 온전히 존재해야 합격
-          if (pName.length >= 2 && cleanNameText.includes(pName)) {
+          if (pName.length >= 2 && cleanText.includes(pName)) {
             matchedName = pName; break;
           }
         }
-        
+        // 뭉개짐 대비 1, 3번째 글자 검증
         if (!matchedName) {
-          // 이름이 뭉개졌을 경우 1, 3번째 글자로 검증
           for (const p of players.value) {
             const pName = String(p.name || '').trim()
-            if (pName.length === 3 && cleanNameText.includes(pName[0]) && cleanNameText.includes(pName[2])) {
+            if (pName.length === 3 && cleanText.includes(pName[0]) && cleanText.includes(pName[2])) {
               matchedName = pName; break;
             }
           }
         }
 
-        // 이름이 존재하면 "진짜 카드"로 등록! TEAM POWER, 12217 등은 여기서 전원 버려짐.
         if (matchedName) {
-            validCards.push({ bbox: textBlock.bbox, badgeUrl, nameUrl, matchedName, nameText });
-        } else {
-            // 디버그용 (가짜 노이즈 탈락 확인)
-            ocrDebugList.push({
-              slot: '노이즈 탈락',
-              badgeImgUrl: badgeUrl, nameImgUrl: nameUrl,
-              rawText: `[배지] ${textBlock.text} / [이름] ${nameText.trim()}`,
-              matchedName: null, matchedCard: null
-            })
+            // 중복 인식 방지 (Tesseract가 같은 이름표를 두 조각으로 쪼개서 인식한 경우 병합)
+            const isDuplicate = validNameplates.some(v => Math.abs(v.bbox.y0 - block.bbox.y0) < 30 && Math.abs(v.bbox.x0 - block.bbox.x0) < 30);
+            if (!isDuplicate) {
+                validNameplates.push({ bbox: block.bbox, matchedName, rawText: block.text });
+            }
         }
     }
 
-    if (validCards.length === 0) {
-      showToast('화면에서 선수 이름표를 하나도 찾지 못했습니다.', 'error')
+    if (validNameplates.length === 0) {
+      showToast('화면에서 등록된 선수 이름을 찾을 수 없습니다.', 'error')
       return
     }
 
-    ocrProgressText.value = '검증 완료! 포지션 슬롯 배치 중...'
+    // 3. 진짜 이름표들의 Y좌표를 묶어 절대 자(RulerY) 계산
+    validNameplates.sort((a, b) => a.bbox.y0 - b.bbox.y0);
+    const yGroups: Array<any[]> = [];
+    const Y_TOLERANCE = img.naturalHeight * 0.12; 
+    
+    for (const nameplate of validNameplates) {
+       let added = false
+       for (const group of yGroups) {
+          const groupAvgY = group.reduce((sum, n) => sum + n.bbox.y0, 0) / group.length
+          if (Math.abs(nameplate.bbox.y0 - groupAvgY) < Y_TOLERANCE) { group.push(nameplate); added = true; break; }
+       }
+       if (!added) yGroups.push([nameplate])
+    }
 
-    // 4. ✨ [절대 격자(rowTier) 할당] 누락된 줄이 있어도 엉뚱한 포지션으로 가지 않도록 방어
-    const minY = Math.min(...validCards.map(c => c.bbox.y0))
-    const minX = Math.min(...validCards.map(c => c.bbox.x0))
-    const maxX = Math.max(...validCards.map(c => c.bbox.x1))
+    let rulerY = img.naturalHeight * 0.16;
+    if (yGroups.length >= 2) {
+        const avgY0 = yGroups[0].reduce((sum, n) => sum + n.bbox.y0, 0) / yGroups[0].length;
+        const avgY1 = yGroups[1].reduce((sum, n) => sum + n.bbox.y0, 0) / yGroups[1].length;
+        rulerY = Math.abs(avgY1 - avgY0); // 1행 이름표와 2행 이름표 사이의 거리
+    }
+    if (rulerY < img.naturalHeight * 0.05 || rulerY > img.naturalHeight * 0.3) rulerY = img.naturalHeight * 0.16;
+
+    // 4. 절대 격자(rowTier)로 포지션 슬롯 할당 및 배지 역추적(위로 점프)
+    ocrProgressText.value = '2차 스캔: 선수 위치 확정 및 배지/시즌 역추적 중...'
+    const minY = Math.min(...validNameplates.map(n => n.bbox.y0))
+    const minX = Math.min(...validNameplates.map(n => n.bbox.x0))
+    const maxX = Math.max(...validNameplates.map(n => n.bbox.x1))
     const diamondW = (maxX - minX) || 1
 
     let matchedCount = 0;
 
-    for (const card of validCards) {
-        // 첫 번째 줄(minY)을 기준으로 몇 칸(rulerY) 떨어져 있는지 수학적으로 계산
-        // 1열, 2열이 증발하고 3열(김도영)만 잡혀도 rowTier는 완벽하게 '2'가 됩니다.
-        const rowTier = Math.round((card.bbox.y0 - minY) / rulerY);
-        const relX = (card.bbox.x0 - minX) / diamondW;
+    for (const nameplate of validNameplates) {
+        const rowTier = Math.round((nameplate.bbox.y0 - minY) / rulerY);
+        const relX = (nameplate.bbox.x0 - minX) / diamondW;
         let slot = '';
 
-        if (rowTier === 0) { // 1번째 꼭대기
+        if (rowTier === 0) { 
             if (relX < 0.35) slot = 'LF'; else if (relX < 0.65) slot = 'CF'; else slot = 'RF';
-        } else if (rowTier === 1) { // 2번째 꼭대기
+        } else if (rowTier === 1) { 
             if (relX < 0.5) slot = 'SS'; else slot = '2B';
-        } else if (rowTier === 2) { // 3번째 꼭대기
+        } else if (rowTier === 2) { 
             if (relX < 0.35) slot = '3B'; else if (relX < 0.65) slot = 'SP'; else slot = '1B';
-        } else if (rowTier >= 3) { // 4번째 꼭대기 (3~4행 간격이 1.0보다 크더라도 라운딩/부등호로 커버)
+        } else if (rowTier >= 3) { 
             if (relX < 0.35) slot = 'MGR'; else if (relX < 0.65) slot = 'C'; else slot = 'DH';
         }
 
         if (!slot || slot === 'MGR') continue
 
-        // 넉넉하게 잘린 진짜 배지 사진에서 시즌 숫자를 포함한 전체 글자 재인식
-        const { data: { text: badgeFullText } } = await engWorker.recognize(card.badgeUrl)
-        const combinedText = `${badgeFullText} ${card.matchedName}`
-        const { player: matchedPlayer } = processCardSlot(combinedText, slot)
+        // ✨ 핵심: 이름표에서 위로 뛰어올라 배지 영역만 크롭
+        const { badgeUrl, nameUrl } = cropBadgeFromNameplate(img, nameplate.bbox, rulerY)
+        let badgeFullText = '';
+        
+        if (badgeUrl) {
+            const { data: { text } } = await engWorker.recognize(badgeUrl)
+            badgeFullText = text.trim();
+        }
+
+        // 시즌 텍스트(오타 포함)와 선수 이름을 결합하여 최종 카드 매칭
+        // (영문 스펠링이 틀려도 이름이 맞기 때문에, processCardSlot에서 해당 선수를 어떻게든 반환하여 빈칸을 채워줍니다)
+        const combinedText = `${badgeFullText} ${nameplate.matchedName}`
+        const { player: matchedPlayer } = processCardSlot(combinedText, slot) 
 
         ocrDebugList.value.push({
           slot: slot,
-          badgeImgUrl: card.badgeUrl, nameImgUrl: card.nameUrl,
-          rawText: `[배지] ${badgeFullText.trim()} / [이름] ${card.nameText.trim()}`,
-          matchedName: card.matchedName,
+          badgeImgUrl: badgeUrl, 
+          nameImgUrl: nameUrl,
+          rawText: `[시즌] ${badgeFullText || '인식실패'} / [이름] ${nameplate.matchedName}`,
+          matchedName: nameplate.matchedName,
           matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
         })
 
@@ -2276,7 +2258,8 @@ const handleOcrUpload = async (event: Event) => {
     URL.revokeObjectURL(img.src)
 
     lineupViewMode.value = 'batter'
-    showToast(`라인업 스캔 완료: 총 ${matchedCount}명이 완벽하게 배치되었습니다!`, 'success')
+    // ✨ 알림창에 사용자 수정 안내 문구 추가
+    showToast(`라인업 스캔 완료: 총 ${matchedCount}명이 배치되었습니다! (시즌이나 카드가 다르면 클릭해서 수정해주세요)`, 'success')
   } catch (err) {
     console.error('OCR 처리 실패:', err)
     showToast('스크린샷을 인식하는 중 오류가 발생했습니다.', 'error')
