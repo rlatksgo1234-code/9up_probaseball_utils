@@ -1980,83 +1980,53 @@ const applyCardSwap = (newCard: Raw) => {
   showCardSwapModal.value = false
 }
 
-// ========================================================
-// 📸 [황금 대칭 좌표계 복원] 듀얼 머지 크롭 엔진
-// ========================================================
-const OCR_SLOTS = [
-  // 1열 (외야): 좌 - 중 - 우
-  { pos: 'LF', x: 0.215, y: 0.10, w: 0.145, h: 0.32 },
-  { pos: 'CF', x: 0.415, y: 0.10, w: 0.145, h: 0.32 },
-  { pos: 'RF', x: 0.615, y: 0.10, w: 0.145, h: 0.32 },
-
-  // 2열 (키스톤): 유격 - 2루
-  { pos: 'SS', x: 0.315, y: 0.26, w: 0.145, h: 0.32 },
-  { pos: '2B', x: 0.515, y: 0.26, w: 0.145, h: 0.32 },
-
-  // 3열 (코너): 3루 - 1루
-  { pos: '3B', x: 0.215, y: 0.39, w: 0.145, h: 0.32 },
-  { pos: '1B', x: 0.615, y: 0.39, w: 0.145, h: 0.32 },
-
-  // 4열 (하단): 포수 - 지명타자
-  { pos: 'C',  x: 0.415, y: 0.67, w: 0.145, h: 0.32 },
-  { pos: 'DH', x: 0.525, y: 0.67, w: 0.145, h: 0.32 }
-]
-
 const triggerOcrInput = () => {
   ocrFileInput.value?.click()
 }
 
-// 📸 [상단 배지 / 하단 이름표 독립 분리 크롭 엔진]
-const cropSplitCardImages = (image: HTMLImageElement, slot: typeof OCR_SLOTS[0]) => {
-  const imgW = image.naturalWidth
-  const imgH = image.naturalHeight
+// 📸 [동적 크롭 엔진] 배지 좌표를 기준으로 이름표 영역을 추적하여 잘라냅니다.
+const cropDynamicCardParts = (image: HTMLImageElement, badgeBbox: any, cardW: number, cardH: number) => {
+  const cardCenterX = badgeBbox.x0 + ((badgeBbox.x1 - badgeBbox.x0) / 2);
 
-  const cardX = imgW * slot.x
-  const cardY = imgH * slot.y
-  const cardW = imgW * slot.w
-  const cardH = imgH * slot.h
+  // 배지 영역 크롭 (디버그 창 표시용)
+  const badgeX = badgeBbox.x0 - 10;
+  const badgeY = Math.max(0, badgeBbox.y0 - 10);
+  const badgeW = (badgeBbox.x1 - badgeBbox.x0) + 20;
+  const badgeH = (badgeBbox.y1 - badgeBbox.y0) + 20;
 
-  // 1. 상단 배지 영역 (HIT, TOP, DGN 등 영문/숫자 전용)
-  const badgeX = cardX + (cardW * 0.05)
-  const badgeY = cardY + (cardH * 0.48) // 0.40에서 0.48로 내려서 뱃지 중앙 타겟팅
-  const badgeW = cardW * 0.45
-  const badgeH = cardH * 0.16
+  // 이름표 영역 크롭 (카드 중앙에서 좌우로 넓게, 배지보다 살짝 아래)
+  const nameX = cardCenterX - (cardW * 0.4);
+  const nameY = badgeBbox.y1 + (cardH * 0.15);
+  const nameW = cardW * 0.8;
+  const nameH = cardH * 0.20;
 
-  // 2. 하단 이름표 영역 (선수 이름 전용)
-  const nameX = cardX + (cardW * 0.10)
-  const nameY = cardY + (cardH * 0.78) // 0.82는 너무 깊음. 0.78 지점이 이름 텍스트 위치
-  const nameW = cardW * 0.80
-  const nameH = cardH * 0.13
+  const scale = 3;
+  const padding = 8;
 
-  const scale = 3
-  const padding = 8
+  const badgeCanvas = document.createElement('canvas');
+  const badgeCtx = badgeCanvas.getContext('2d');
+  if (badgeCtx) {
+      badgeCanvas.width = Math.round(badgeW * scale) + (padding * 2);
+      badgeCanvas.height = Math.round(badgeH * scale) + (padding * 2);
+      badgeCtx.fillStyle = '#000';
+      badgeCtx.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height);
+      badgeCtx.drawImage(image, badgeX, badgeY, badgeW, badgeH, padding, padding, badgeCanvas.width - (padding * 2), badgeCanvas.height - (padding * 2));
+  }
 
-  // --- 상단 배지 캔버스 생성 ---
-  const badgeCanvas = document.createElement('canvas')
-  const badgeCtx = badgeCanvas.getContext('2d')
-  if (!badgeCtx) return { badgeUrl: null, nameUrl: null }
-
-  badgeCanvas.width = Math.round(badgeW * scale) + (padding * 2)
-  badgeCanvas.height = Math.round(badgeH * scale) + (padding * 2)
-  badgeCtx.fillStyle = '#000000'
-  badgeCtx.fillRect(0, 0, badgeCanvas.width, badgeCanvas.height)
-  badgeCtx.drawImage(image, badgeX, badgeY, badgeW, badgeH, padding, padding, badgeCanvas.width - (padding * 2), badgeCanvas.height - (padding * 2))
-
-  // --- 하단 이름표 캔버스 생성 ---
-  const nameCanvas = document.createElement('canvas')
-  const nameCtx = nameCanvas.getContext('2d')
-  if (!nameCtx) return { badgeUrl: null, nameUrl: null }
-
-  nameCanvas.width = Math.round(nameW * scale) + (padding * 2)
-  nameCanvas.height = Math.round(nameH * scale) + (padding * 2)
-  nameCtx.fillStyle = '#000000'
-  nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height)
-  nameCtx.drawImage(image, nameX, nameY, nameW, nameH, padding, padding, nameCanvas.width - (padding * 2), nameCanvas.height - (padding * 2))
+  const nameCanvas = document.createElement('canvas');
+  const nameCtx = nameCanvas.getContext('2d');
+  if (nameCtx) {
+      nameCanvas.width = Math.round(nameW * scale) + (padding * 2);
+      nameCanvas.height = Math.round(nameH * scale) + (padding * 2);
+      nameCtx.fillStyle = '#000';
+      nameCtx.fillRect(0, 0, nameCanvas.width, nameCanvas.height);
+      nameCtx.drawImage(image, nameX, nameY, nameW, nameH, padding, padding, nameCanvas.width - (padding * 2), nameCanvas.height - (padding * 2));
+  }
 
   return {
-    badgeUrl: badgeCanvas.toDataURL('image/png'),
-    nameUrl: nameCanvas.toDataURL('image/png')
-  }
+      badgeUrl: badgeCanvas.toDataURL('image/png'),
+      nameUrl: nameCanvas.toDataURL('image/png')
+  };
 }
   
 // ========================================================
@@ -2152,7 +2122,7 @@ const handleOcrUpload = async (event: Event) => {
 
   try {
     isOcrProcessing.value = true
-    ocrProgressText.value = 'OCR 전용 엔진을 초기화하고 있습니다...'
+    ocrProgressText.value = '이미지 전체 스캔 및 4x3 다이아몬드 격자 분석 중...'
     ocrDebugList.value = []
 
     const img = new Image()
@@ -2162,32 +2132,85 @@ const handleOcrUpload = async (event: Event) => {
     const engWorker = await createWorker('eng')
     const korWorker = await createWorker('kor')
 
-    await engWorker.setParameters({
-      tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 '
-    })
-    // ❌ 주의: korWorker.setParameters(...) 부분은 완전히 삭제했습니다!
+    await engWorker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' })
+    // 한글은 화이트리스트를 지정하지 않아야 받침을 완벽하게 읽습니다.
+
+    // 1. 전체 이미지 스캔하여 영어/숫자 텍스트 좌표 찾기
+    const { data: { words } } = await engWorker.recognize(img)
+
+    // 2. 등급 배지로 추정되는 텍스트만 필터링 (정규식 강화)
+    const badges = words.filter(w => /HIT|TOP|DGN|ACE|GG|MMVP|ROY/i.test(w.text.replace(/[^a-zA-Z]/g, '')))
+
+    if (badges.length === 0) {
+      showToast('화면에서 등급 배지를 찾을 수 없습니다. 다시 캡처해주세요.', 'error')
+      return
+    }
+
+    // 3. 다이아몬드 포메이션 전체의 경계 좌표 계산
+    const minX = Math.min(...badges.map(b => b.bbox.x0))
+    const maxX = Math.max(...badges.map(b => b.bbox.x1))
+    const minY = Math.min(...badges.map(b => b.bbox.y0))
+    const maxY = Math.max(...badges.map(b => b.bbox.y1))
+
+    const diamondWidth = maxX - minX || 1
+    const diamondHeight = maxY - minY || 1
+
+    // 카드의 대략적인 크기 유추 (다이아몬드는 대략 세로 2.5칸, 가로 2.5칸 분량)
+    const estCardW = diamondWidth / 2.5
+    const estCardH = diamondHeight / 2.5
 
     let matchedCount = 0
 
-    for (let i = 0; i < OCR_SLOTS.length; i++) {
-      const slot = OCR_SLOTS[i]
-      ocrProgressText.value = `[${i + 1}/${OCR_SLOTS.length}] ${slot.pos} 슬롯 정밀 분석 중...`
+    for (const badge of badges) {
+      // 4. 전체 다이아몬드 내에서의 상대적 위치 (0.0 ~ 1.0) 계산
+      const relX = (badge.bbox.x0 - minX) / diamondWidth
+      const relY = (badge.bbox.y0 - minY) / diamondHeight
 
-      const { badgeUrl, nameUrl } = cropSplitCardImages(img, slot)
-      if (!badgeUrl || !nameUrl) continue
+      let slot = ''
+      // Row 1 (첫 번째 꼭대기: LF, CF, RF)
+      if (relY < 0.25) {
+        if (relX < 0.35) slot = 'LF'
+        else if (relX < 0.65) slot = 'CF'
+        else slot = 'RF'
+      }
+      // Row 2 (두 번째 꼭대기: SS, 2B)
+      else if (relY < 0.50) {
+        if (relX < 0.50) slot = 'SS'
+        else slot = '2B'
+      }
+      // Row 3 (세 번째 꼭대기: 3B, SP, 1B)
+      else if (relY < 0.75) {
+        if (relX < 0.35) slot = '3B'
+        else if (relX < 0.65) slot = 'SP'
+        else slot = '1B'
+      }
+      // Row 4 (네 번째 꼭대기: MGR, C, DH)
+      else {
+        if (relX < 0.35) slot = 'MGR'
+        else if (relX < 0.65) slot = 'C'
+        else slot = 'DH'
+      }
 
-      const { data: { text: badgeText } } = await engWorker.recognize(badgeUrl)
+      // 감독 카드는 라인업에 배치하지 않으므로 패스
+      if (!slot || slot === 'MGR') continue 
+
+      ocrProgressText.value = `[${slot}] 카드 이름 분석 중...`
+
+      // 5. 배지 좌표를 징검다리 삼아 이름표만 동적 크롭
+      const { badgeUrl, nameUrl } = cropDynamicCardParts(img, badge.bbox, estCardW, estCardH)
+      if (!nameUrl) continue
+
+      // 6. 이름표 한글 OCR 스캔
       const { data: { text: nameText } } = await korWorker.recognize(nameUrl)
+      const combinedText = `${badge.text} ${nameText}`
 
-      const combinedText = `${badgeText} ${nameText}`
-      const { player: matchedPlayer, name: foundName } = processCardSlot(combinedText, slot.pos)
+      const { player: matchedPlayer, name: foundName } = processCardSlot(combinedText, slot)
 
-      // 디버그 리스트에 배지와 이름 이미지를 둘 다 넘김
       ocrDebugList.value.push({
-        slot: slot.pos,
+        slot: slot,
         badgeImgUrl: badgeUrl,
         nameImgUrl: nameUrl,
-        rawText: `[배지] ${badgeText.trim()} / [이름] ${nameText.trim()}`,
+        rawText: `[배지] ${badge.text} / [이름] ${nameText.trim()}`,
         matchedName: foundName,
         matchedCard: matchedPlayer ? `[${matchedPlayer.grade}] ${matchedPlayer.name}` : null
       })
@@ -2198,9 +2221,8 @@ const handleOcrUpload = async (event: Event) => {
             lineup.value[k] = null
           }
         })
-
-        lineup.value[slot.pos] = matchedPlayer
-        initPlayerBuff(slot.pos, matchedPlayer)
+        lineup.value[slot] = matchedPlayer
+        initPlayerBuff(slot, matchedPlayer)
         matchedCount++
       }
     }
