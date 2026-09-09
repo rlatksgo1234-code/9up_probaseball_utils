@@ -1986,19 +1986,20 @@ const triggerOcrInput = () => {
 
 // 📸 [동적 크롭 엔진] '1단위 간격(rulerY)'을 절대 자(Ruler)로 사용하여 노이즈를 완벽히 점프합니다.
 const cropDynamicCardParts = (image: HTMLImageElement, badgeBbox: any, rulerY: number) => {
+  
   // 1. 상단 배지 크롭: 오른쪽으로 넉넉하게 확장하여 'HIT 83'의 시즌 숫자까지 완벽 포획
-  // 높이는 타이트하게 유지해서 바로 밑에 있는 별(★)을 잘라냅니다.
   const badgeX = Math.max(0, badgeBbox.x0 - 5);
   const badgeY = Math.max(0, badgeBbox.y0 - 5);
-  const badgeW = Math.max((badgeBbox.x1 - badgeBbox.x0) * 1.5, rulerY * 1.5); 
+  // 배지가 너무 좁게 잡히는 걸 막기 위해 가로 폭 보장
+  const badgeW = Math.max((badgeBbox.x1 - badgeBbox.x0) * 1.5, rulerY * 1.2); 
   const badgeH = (badgeBbox.y1 - badgeBbox.y0) + 12;
 
-  // 2. 하단 이름표 크롭 (이단 점프): 배지 위치에서 밑으로 rulerY의 약 1.4배만큼 과감하게 뛰어내립니다.
-  // 중간에 있는 별과 파워 숫자를 완벽하게 건너뛰고, 이름표만 들어오도록 크고 넓게 자릅니다.
-  const nameX = Math.max(0, badgeBbox.x0 - (rulerY * 1.2));
-  const nameY = badgeBbox.y0 + (rulerY * 1.4); 
-  const nameW = rulerY * 3.0; // 이름 3~4글자가 다 담기도록 좌우로 아주 넓게
-  const nameH = rulerY * 1.2; // 위아래로도 넉넉하게
+  // 2. 하단 이름표 크롭 (이단 점프): 배지 위치에서 밑으로 rulerY의 0.45배만큼 내려갑니다.
+  // 이름표가 담기는 박스 높이는 rulerY의 0.35배로 넉넉하게 잡아줍니다. (0.45 ~ 0.80 구간 포획)
+  const nameX = Math.max(0, badgeBbox.x0 - (rulerY * 0.6)); // 이름이 잘리지 않게 좌우로 길게
+  const nameY = badgeBbox.y0 + (rulerY * 0.45); 
+  const nameW = rulerY * 2.0; 
+  const nameH = rulerY * 0.35; 
 
   const scale = 3;
   const padding = 8;
@@ -2116,7 +2117,7 @@ const processCardSlot = (rawText: string, targetPos: string): { player: Raw | nu
   return { player: bestCard, name: matchedName }
 }
 
-// 📸 [OCR 실행 엔진] 4행 3열 그룹화, 가짜 배지 필터링(이중 검증), 완벽한 다이아몬드 스캔
+// 📸 [OCR 실행 엔진] 4행 그룹화, 가짜 배지 필터링(이중 검증), 완벽한 다이아몬드 스캔
 const handleOcrUpload = async (event: Event) => {
   const target = event.target as HTMLInputElement
   const file = target.files?.[0]
@@ -2137,10 +2138,10 @@ const handleOcrUpload = async (event: Event) => {
     // 영문 워커는 화이트리스트 유지, 한글 워커는 완전 해방(받침 인식)
     await engWorker.setParameters({ tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' })
 
-    // 1. 전체 화면을 스캔하여 영문 텍스트 긁어오기
+    // 1. 전체 화면을 스캔하여 영문 텍스트(용의자) 긁어오기
     const { data: { words } } = await engWorker.recognize(img)
 
-    // 2. 지정된 배지 문자열이 포함된 '용의자'들만 추려내기 ('TEAM POWER'도 일단 포함됨)
+    // 2. 지정된 배지 문자열이 포함된 '용의자'들만 추려내기 ('TEAM POWER' 포함됨)
     const validGrades = ['HIT', 'TOP', 'DGN', 'ACE', 'GG', 'MMVP', 'ROY', 'TEA', 'SEA', 'POS', 'ASG', 'NT']
     const potentialBadges = words.filter(w => {
        const cleanText = w.text.replace(/[^a-zA-Z]/g, '').toUpperCase()
@@ -2152,7 +2153,7 @@ const handleOcrUpload = async (event: Event) => {
       return
     }
 
-    // 3. 용의자들을 Y좌표(높이) 순으로 정렬 후 4개의 줄(Row)로 묶음
+    // 3. 용의자들을 Y좌표(높이) 순으로 정렬 후 4개의 줄(Row)로 그룹화
     potentialBadges.sort((a, b) => a.bbox.y0 - b.bbox.y0);
     const rows: Array<any[]> = [];
     
@@ -2173,7 +2174,7 @@ const handleOcrUpload = async (event: Event) => {
     }
 
     // 4. [핵심] 절대 자(Ruler) 만들기: 1행과 2행의 평균 높이 차이 계산
-    let rulerY = img.naturalHeight * 0.16; // 2줄 이상 없을 경우를 대비한 기본값
+    let rulerY = img.naturalHeight * 0.16; // 기본값
     if (rows.length >= 2) {
         const avgY0 = rows[0].reduce((sum, b) => sum + b.bbox.y0, 0) / rows[0].length;
         const avgY1 = rows[1].reduce((sum, b) => sum + b.bbox.y0, 0) / rows[1].length;
@@ -2197,7 +2198,7 @@ const handleOcrUpload = async (event: Event) => {
           const relX = (badge.bbox.x0 - minX) / diamondW
           let slot = ''
 
-          if (rowIndex === 0) { // 1번째 꼭대기: LF, CF, RF (+TEAM POWER 노이즈)
+          if (rowIndex === 0) { // 1번째 꼭대기: LF, CF, RF (+ 노이즈)
              if (relX < 0.35) slot = 'LF'
              else if (relX < 0.65) slot = 'CF'
              else slot = 'RF' 
@@ -2235,6 +2236,7 @@ const handleOcrUpload = async (event: Event) => {
               matchedName = pName; break;
             }
           }
+          // 글자가 살짝 뭉개졌을 경우 1, 3번째 글자만 일치해도 통과
           if (!matchedName) {
             for (const p of players.value) {
               const pName = String(p.name || '').trim()
